@@ -1088,6 +1088,7 @@ async def generate_response(
     task_mgr: ClaudeTaskManager,
     projects: list[dict],
     conversation_history: list[dict],
+    last_response: str = "",
 ) -> str:
     """Generate a JARVIS response using Anthropic API."""
     now = datetime.now()
@@ -1123,6 +1124,10 @@ async def generate_response(
     memory_ctx = build_memory_context(text)
     if memory_ctx:
         system += f"\n\nJARVIS MEMORY:\n{memory_ctx}"
+
+    # Self-awareness — remind JARVIS of last response to avoid repetition
+    if last_response:
+        system += f'\n\nYOUR LAST RESPONSE (do not repeat this):\n"{last_response[:150]}"'
 
     # Use conversation history — keep the last 40 messages (20 pairs) for context
     messages = conversation_history[-40:]
@@ -1845,6 +1850,9 @@ async def voice_handler(ws: WebSocket):
     # Audio collision prevention — track when user last spoke
     voice_state = {"last_user_time": 0.0}
 
+    # Self-awareness — track last spoken response to avoid repetition
+    last_jarvis_response = ""
+
     log.info("Voice WebSocket connected")
 
     try:
@@ -1999,6 +2007,7 @@ async def voice_handler(ws: WebSocket):
                         response_text = await generate_response(
                             user_text, anthropic_client, task_manager,
                             cached_projects, history,
+                            last_response=last_jarvis_response,
                         )
                     else:
                         # Send to claude -p (full power)
@@ -2101,6 +2110,7 @@ async def voice_handler(ws: WebSocket):
                             response_text = await generate_response(
                                 user_text, anthropic_client, task_manager,
                                 cached_projects, history,
+                                last_response=last_jarvis_response,
                             )
 
                             # Check for action tags embedded in LLM response
@@ -2253,6 +2263,7 @@ async def voice_handler(ws: WebSocket):
                     await ws.send_json({"type": "text", "text": response_text})
                     await ws.send_json({"type": "status", "state": "idle"})
                 log.info(f"JARVIS: {response_text}")
+                last_jarvis_response = response_text
 
             except Exception as e:
                 log.error(f"Error: {e}", exc_info=True)
