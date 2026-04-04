@@ -29,7 +29,7 @@ JARVIS connects to your Apple Calendar, Mail, and Notes. It can browse the web, 
 
 ## Requirements
 
-- **Windows 10/11** (uses AppleScript for Calendar, Mail, Notes integration)
+- **Windows 10/11** (uses AppleScript for Calendar, Mail, Notes integration) - Phasing out all AppleScript
 - **Python 3.11+**
 - **Node.js 18+**
 - **Google Chrome** (required for Web Speech API)

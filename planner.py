@@ -1,5 +1,5 @@
 """
-JARVIS Task Planner — Conversational planning before spawning Claude Code.
+JARVIS Task Planner — Conversational planning before spawning Gemini Code.
 
 Handles:
 1. Planning mode detection (distinguish "build me X" from "what time is it")
@@ -7,21 +7,36 @@ Handles:
 3. Plan confirmation flow (summarize → confirm → execute)
 4. Context gathering from project files
 5. Structured prompt building from templates + context + answers
+
+Only active during task planning flows. On completion, writes decisions
+into ConversationSession via log_plan() so they persist across the session.
 """
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-import anthropic
+from google import genai
+from google.genai import types as genai_types
 
 from templates import TEMPLATES, get_template
 
 log = logging.getLogger("jarvis.planner")
 
-DESKTOP_PATH = Path.home() / "Desktop"
+# Mirror the same DESKTOP_PATH logic as server.py and actions.py
+_desktop_env = os.getenv("PROJECTS_DIR", "")
+if _desktop_env:
+    DESKTOP_PATH = Path(_desktop_env)
+else:
+    _default = Path.home() / "Desktop"
+    DESKTOP_PATH = _default if _default.exists() else Path(__file__).parent
+
+_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+_PLANNER_MODEL = "gemini-3-flash-preview"
+
 
 # ---------------------------------------------------------------------------
 # Planning Mode Detection
@@ -65,14 +80,14 @@ class PlanningDecision:
 
 async def detect_planning_mode(
     user_text: str,
-    client: Optional[anthropic.AsyncAnthropic] = None,
+    client: Optional[genai.Client] = None,
     force_bypass: bool = False,
 ) -> PlanningDecision:
     """Classify a user request as simple (execute now) or complex (needs planning).
 
     Args:
         user_text: The raw user request.
-        client: Anthropic async client for Haiku classification.
+        client: google.genai.Client instance.
         force_bypass: If True, skip planning and apply smart defaults.
 
     Returns:
@@ -82,7 +97,6 @@ async def detect_planning_mode(
 
     # Check for explicit bypass phrases
     if force_bypass or any(phrase in text_lower for phrase in BYPASS_PHRASES):
-        # Still classify the task type so we can apply smart defaults
         task_type = _quick_classify(text_lower)
         defaults = dict(SMART_DEFAULTS.get(task_type, {}))
         return PlanningDecision(
@@ -93,7 +107,7 @@ async def detect_planning_mode(
             smart_defaults=defaults,
         )
 
-    # Use Haiku for accurate classification
+    # Use Gemini Flash for accurate classification
     if client:
         return await _classify_planning_mode_llm(user_text, client)
 
@@ -124,45 +138,50 @@ def _quick_classify(text: str) -> str:
 
 
 async def _classify_planning_mode_llm(
-    text: str, client: anthropic.AsyncAnthropic
+    text: str, client: genai.Client
 ) -> PlanningDecision:
-    """Use Haiku to classify request and identify missing info."""
+    """Use Gemini Flash to classify request and identify missing info."""
+    system = (
+        "You analyze development requests to decide if they need planning.\n"
+        "Respond with JSON only, no markdown fences.\n\n"
+        "Fields:\n"
+        "- needs_planning: bool — true if the request is vague or missing key details\n"
+        "- task_type: build|fix|research|refactor|simple\n"
+        "- confidence: float 0.0-1.0 — how confident you are in the classification\n"
+        "- missing_info: list[str] — what essential info is absent\n\n"
+        "Rules:\n"
+        "- Short/vague build requests ('make a website') → needs_planning=true\n"
+        "- Detailed requests with file paths, specifics → needs_planning=false\n"
+        "- Fix requests with specific file/line info → needs_planning=false\n"
+        "- Fix requests without context → needs_planning=true\n"
+        "- Simple questions/chat → needs_planning=false, task_type=simple\n"
+        "- missing_info should list specific things like: "
+        "project_name, tech_stack, design_requirements, target_file, "
+        "error_details, scope, expected_behavior\n\n"
+        "Examples:\n"
+        '{"needs_planning": true, "task_type": "build", "confidence": 0.95, '
+        '"missing_info": ["project_name", "tech_stack", "design_requirements"]}\n'
+        '{"needs_planning": false, "task_type": "fix", "confidence": 0.9, '
+        '"missing_info": []}\n'
+        '{"needs_planning": false, "task_type": "simple", "confidence": 0.99, '
+        '"missing_info": []}'
+    )
+
     try:
-        response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=400,
-            system=(
-                "You analyze development requests to decide if they need planning.\n"
-                "Respond with JSON only, no markdown fences.\n\n"
-                "Fields:\n"
-                "- needs_planning: bool — true if the request is vague or missing key details\n"
-                "- task_type: build|fix|research|refactor|simple\n"
-                "- confidence: float 0.0-1.0 — how confident you are in the classification\n"
-                "- missing_info: list[str] — what essential info is absent\n\n"
-                "Rules:\n"
-                "- Short/vague build requests ('make a website') → needs_planning=true\n"
-                "- Detailed requests with file paths, specifics → needs_planning=false\n"
-                "- Fix requests with specific file/line info → needs_planning=false\n"
-                "- Fix requests without context → needs_planning=true\n"
-                "- Simple questions/chat → needs_planning=false, task_type=simple\n"
-                "- missing_info should list specific things like: "
-                "project_name, tech_stack, design_requirements, target_file, "
-                "error_details, scope, expected_behavior\n\n"
-                "Examples:\n"
-                '{"needs_planning": true, "task_type": "build", "confidence": 0.95, '
-                '"missing_info": ["project_name", "tech_stack", "design_requirements"]}\n'
-                '{"needs_planning": false, "task_type": "fix", "confidence": 0.9, '
-                '"missing_info": []}\n'
-                '{"needs_planning": false, "task_type": "simple", "confidence": 0.99, '
-                '"missing_info": []}'
-            ),
-            messages=[{"role": "user", "content": text}],
+        config = genai_types.GenerateContentConfig(
+            system_instruction=system,
+            max_output_tokens=400,
         )
-        raw = response.content[0].text.strip()
+        response = await client.aio.models.generate_content(
+            model=_PLANNER_MODEL,
+            contents=text,
+            config=config,
+        )
+        raw = response.text.strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-        data = json.loads(raw)
 
+        data = json.loads(raw)
         task_type = data.get("task_type", "simple")
         needs_planning = data.get("needs_planning", True)
         defaults = dict(SMART_DEFAULTS.get(task_type, {})) if not needs_planning else {}
@@ -176,15 +195,12 @@ async def _classify_planning_mode_llm(
         )
     except Exception as e:
         log.warning(f"Planning mode detection failed: {e}")
-        # Fall back to heuristic
         return _classify_planning_mode_heuristic(text.lower().strip())
 
 
 def _classify_planning_mode_heuristic(text: str) -> PlanningDecision:
-    """Fallback heuristic when Haiku is unavailable."""
+    """Fallback heuristic when Gemini is unavailable."""
     task_type = _quick_classify(text)
-
-    # Short requests almost always need planning
     word_count = len(text.split())
 
     if task_type == "simple":
@@ -196,7 +212,6 @@ def _classify_planning_mode_heuristic(text: str) -> PlanningDecision:
         )
 
     if task_type == "fix":
-        # Fix with file/line references → no planning needed
         has_specifics = any(
             indicator in text
             for indicator in ["line ", "file ", ".py", ".js", ".ts", "error:", "traceback"]
@@ -223,7 +238,6 @@ def _classify_planning_mode_heuristic(text: str) -> PlanningDecision:
                 confidence=0.8,
                 missing_info=["project_name", "tech_stack", "design_requirements"],
             )
-        # Longer build requests may have enough info
         return PlanningDecision(
             needs_planning=True,
             task_type="build",
@@ -231,7 +245,6 @@ def _classify_planning_mode_heuristic(text: str) -> PlanningDecision:
             missing_info=["project_name", "tech_stack"],
         )
 
-    # research / refactor — generally need some clarification
     missing = {
         "research": ["scope", "depth"],
         "refactor": ["target_file", "refactor_goal"],
@@ -243,8 +256,9 @@ def _classify_planning_mode_heuristic(text: str) -> PlanningDecision:
         missing_info=missing.get(task_type, []),
     )
 
+
 # ---------------------------------------------------------------------------
-# Task type → relevant clarifying questions
+# Task type → clarifying questions
 # ---------------------------------------------------------------------------
 
 QUESTION_MAP = {
@@ -266,7 +280,7 @@ QUESTION_MAP = {
     "refactor": [
         {"key": "project", "q": "Which project, sir?", "default": None},
         {"key": "target", "q": "Which file or module?", "default": None},
-        {"key": "goal", "q": "What's the goal — performance, readability, or structure?", "default": "readability"},
+        {"key": "goal", "q": "Performance, readability, or structure?", "default": "readability"},
     ],
     "run": [
         {"key": "project", "q": "Which project, sir?", "default": None},
@@ -287,7 +301,7 @@ QUESTION_MAP = {
 @dataclass
 class Plan:
     """A plan being built through conversation."""
-    task_type: str  # build, fix, research, etc.
+    task_type: str
     original_request: str
     project: Optional[str] = None
     project_path: Optional[str] = None
@@ -295,11 +309,10 @@ class Plan:
     pending_questions: list = field(default_factory=list)
     current_question_index: int = 0
     confirmed: bool = False
-    skipped: bool = False  # "just do it" — skip remaining questions
+    skipped: bool = False
 
     @property
     def is_complete(self) -> bool:
-        """All questions answered or skipped."""
         return self.skipped or self.current_question_index >= len(self.pending_questions)
 
     @property
@@ -310,6 +323,19 @@ class Plan:
         if self.current_question_index < len(self.pending_questions):
             return self.pending_questions[self.current_question_index]
         return None
+
+    def to_context_dict(self) -> dict:
+        """
+        Return a clean dict for conversation.py log_plan() consumption.
+        Ensures all fields are present and correctly typed.
+        """
+        return {
+            "task_type": self.task_type,
+            "original_request": self.original_request,
+            "project": self.project or "",
+            "project_path": self.project_path or "",
+            "answers": self.answers,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -340,13 +366,14 @@ async def gather_project_context(project_path: str) -> dict:
             entry.name + ("/" if entry.is_dir() else "")
             for entry in path.iterdir()
             if not entry.name.startswith(".")
-        ])[:30]  # cap at 30 entries
+        ])[:30]
     except PermissionError:
         pass
 
     # Key config files
     for filename, key in [
         ("CLAUDE.md", "claude_md"),
+        ("TASK.md", "claude_md"),       # Windows port uses TASK.md
         ("package.json", "package_json"),
         ("requirements.txt", "requirements_txt"),
         ("README.md", "readme"),
@@ -354,15 +381,17 @@ async def gather_project_context(project_path: str) -> dict:
         filepath = path / filename
         if filepath.exists():
             try:
-                content = filepath.read_text()
-                # Truncate large files
+                content = filepath.read_text(encoding="utf-8", errors="replace")
                 if len(content) > 2000:
                     content = content[:2000] + "\n... (truncated)"
+                # Don't overwrite claude_md if already set
+                if key == "claude_md" and context["claude_md"]:
+                    continue
                 context[key] = content
             except Exception:
                 pass
 
-    # Git log
+    # Git log — graceful fallback if git not on PATH or not a repo
     import asyncio
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -371,11 +400,15 @@ async def gather_project_context(project_path: str) -> dict:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await proc.communicate()
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
         if proc.returncode == 0:
             context["git_log"] = stdout.decode().strip()
-    except Exception:
-        pass
+    except FileNotFoundError:
+        log.debug("git not found on PATH — skipping git log")
+    except asyncio.TimeoutError:
+        log.debug("git log timed out")
+    except Exception as e:
+        log.debug(f"git log failed: {e}")
 
     return context
 
@@ -385,7 +418,7 @@ async def gather_project_context(project_path: str) -> dict:
 # ---------------------------------------------------------------------------
 
 class TaskPlanner:
-    """Manages the planning conversation before spawning Claude Code."""
+    """Manages the planning conversation before spawning the agent."""
 
     def __init__(self):
         self.active_plan: Optional[Plan] = None
@@ -398,7 +431,7 @@ class TaskPlanner:
         self,
         user_request: str,
         projects: list[dict],
-        client: anthropic.AsyncAnthropic,
+        client: genai.Client,
     ) -> dict:
         """Analyze request and determine what questions to ask.
 
@@ -410,13 +443,11 @@ class TaskPlanner:
             "needs_questions": bool,
         }
         """
-        # Classify the request with Haiku
         classification = await self._classify_request(user_request, client)
         task_type = classification.get("task_type", "build")
         detected_project = classification.get("project", "")
         inferred_answers = classification.get("inferred", {})
 
-        # Build question list for this task type
         questions = list(QUESTION_MAP.get(task_type, QUESTION_MAP["build"]))
 
         # Auto-answer project question if we can match it
@@ -425,7 +456,10 @@ class TaskPlanner:
         if detected_project:
             for p in projects:
                 name_norm = p["name"].lower().replace("-", "").replace("_", "")
-                detect_norm = detected_project.lower().replace("-", "").replace("_", "").replace(" ", "")
+                detect_norm = (
+                    detected_project.lower()
+                    .replace("-", "").replace("_", "").replace(" ", "")
+                )
                 if detect_norm in name_norm or name_norm in detect_norm:
                     project_match = p["name"]
                     project_path = p["path"]
@@ -448,9 +482,7 @@ class TaskPlanner:
             pending_questions=pending,
         )
 
-        first_question = None
-        if pending:
-            first_question = pending[0]["q"]
+        first_question = pending[0]["q"] if pending else None
 
         return {
             "task_type": task_type,
@@ -471,15 +503,21 @@ class TaskPlanner:
         """
         plan = self.active_plan
         if not plan:
-            return {"next_question": None, "plan_complete": False, "needs_confirmation": False}
+            return {
+                "next_question": None,
+                "plan_complete": False,
+                "needs_confirmation": False,
+            }
 
         answer_lower = answer.lower().strip()
 
-        # Check for "just do it" / skip
-        skip_phrases = ["just do it", "skip", "go ahead", "proceed", "do it", "yep just go"]
+        # Check for bypass
+        skip_phrases = [
+            "just do it", "skip", "go ahead", "proceed",
+            "do it", "yep just go",
+        ]
         if any(phrase in answer_lower for phrase in skip_phrases):
             plan.skipped = True
-            # Fill remaining with defaults
             for q in plan.pending_questions[plan.current_question_index:]:
                 if q["default"] is not None and q["key"] not in plan.answers:
                     plan.answers[q["key"]] = q["default"]
@@ -496,11 +534,14 @@ class TaskPlanner:
         if current_q:
             plan.answers[current_q["key"]] = answer
 
-            # If they answered the project question, try to resolve path
+            # Resolve project path if project question was answered
             if current_q["key"] == "project" and not plan.project_path:
                 for p in projects:
                     name_norm = p["name"].lower().replace("-", "").replace("_", "")
-                    answer_norm = answer.lower().replace("-", "").replace("_", "").replace(" ", "")
+                    answer_norm = (
+                        answer.lower()
+                        .replace("-", "").replace("_", "").replace(" ", "")
+                    )
                     if answer_norm in name_norm or name_norm in answer_norm:
                         plan.project = p["name"]
                         plan.project_path = p["path"]
@@ -512,7 +553,7 @@ class TaskPlanner:
 
             plan.current_question_index += 1
 
-        # Check if there are more questions
+        # More questions?
         next_q = plan.current_question()
         if next_q:
             return {
@@ -522,7 +563,7 @@ class TaskPlanner:
                 "confirmation_summary": None,
             }
 
-        # All questions answered — generate confirmation summary
+        # All done — generate confirmation
         summary = await self.get_confirmation_summary()
         return {
             "next_question": None,
@@ -542,24 +583,41 @@ class TaskPlanner:
         """
         plan = self.active_plan
         if not plan:
-            return {"confirmed": False, "cancelled": True, "modification_question": None}
+            return {
+                "confirmed": False,
+                "cancelled": True,
+                "modification_question": None,
+            }
 
         answer_lower = answer.lower().strip()
 
-        yes_phrases = ["yes", "yeah", "yep", "do it", "proceed", "go", "affirmative",
-                       "confirmed", "go ahead", "make it so", "let's go", "sure"]
-        no_phrases = ["no", "nope", "cancel", "stop", "nevermind", "forget it", "abort"]
+        yes_phrases = [
+            "yes", "yeah", "yep", "do it", "proceed", "go",
+            "affirmative", "confirmed", "go ahead", "make it so",
+            "let's go", "sure",
+        ]
+        no_phrases = [
+            "no", "nope", "cancel", "stop", "nevermind",
+            "forget it", "abort",
+        ]
 
         if any(phrase in answer_lower for phrase in yes_phrases):
             plan.confirmed = True
-            return {"confirmed": True, "cancelled": False, "modification_question": None}
+            return {
+                "confirmed": True,
+                "cancelled": False,
+                "modification_question": None,
+            }
 
         if any(phrase in answer_lower for phrase in no_phrases):
             self.active_plan = None
-            return {"confirmed": False, "cancelled": True, "modification_question": None}
+            return {
+                "confirmed": False,
+                "cancelled": True,
+                "modification_question": None,
+            }
 
-        # Treat as a modification — restart with the new info folded in
-        # For now, just update the original request and re-confirm
+        # Treat as modification — fold new info in and re-confirm
         plan.original_request += f" ({answer})"
         summary = await self.get_confirmation_summary()
         return {
@@ -574,9 +632,6 @@ class TaskPlanner:
         if not plan:
             return "No active plan."
 
-        parts = []
-
-        # Task description
         action_verb = {
             "build": "create",
             "fix": "fix",
@@ -586,41 +641,38 @@ class TaskPlanner:
             "feature": "build",
         }.get(plan.task_type, "work on")
 
-        parts.append(f"I'll {action_verb}")
+        parts = [f"I'll {action_verb}"]
 
-        # What — use a clean description, not raw user text
         if plan.answers.get("details"):
             parts.append(plan.answers["details"])
         elif plan.answers.get("description"):
             parts.append(plan.answers["description"])
         else:
-            # Clean up the request — extract the core task
             clean = plan.original_request.lower()
-            # Remove conversational fluff
-            for prefix in ["yeah ", "i just want to ", "can you ", "i want to ", "i need to ", "let's ", "please ", "go ahead and "]:
+            for prefix in [
+                "yeah ", "i just want to ", "can you ", "i want to ",
+                "i need to ", "let's ", "please ", "go ahead and ",
+            ]:
                 if clean.startswith(prefix):
                     clean = clean[len(prefix):]
             parts.append(clean)
 
-        # Where
         if plan.project:
             target_path = plan.project_path or f"~/Desktop/{plan.project}"
             parts.append(f"at {target_path}")
 
-        # Tech stack
         if plan.answers.get("tech_stack"):
             parts.append(f"using {plan.answers['tech_stack']}")
 
-        summary = " ".join(parts) + ". Shall I proceed, sir?"
-        return summary
+        return " ".join(parts) + ". Shall I proceed, sir?"
 
     async def build_prompt(self) -> str:
-        """Build the structured claude -p prompt from the finalized plan."""
+        """Build the structured agent prompt from the finalized plan."""
         plan = self.active_plan
         if not plan:
             return ""
 
-        # Gather project context if we have a path
+        # Gather project context if path exists
         context = {}
         if plan.project_path and Path(plan.project_path).exists():
             context = await gather_project_context(plan.project_path)
@@ -629,7 +681,6 @@ class TaskPlanner:
         template = get_template(plan.task_type, plan.original_request)
 
         if template:
-            # Fill template with available data
             fill = {
                 "project_name": plan.project or "project",
                 "working_dir": plan.project_path or str(DESKTOP_PATH),
@@ -645,16 +696,15 @@ class TaskPlanner:
                 "research_depth": plan.answers.get("depth", "thorough"),
                 "output_format": plan.answers.get("output_format", "summary"),
             }
-
             try:
-                prompt = template.format(**{k: v for k, v in fill.items() if v is not None})
+                prompt = template.format(
+                    **{k: v for k, v in fill.items() if v is not None}
+                )
             except KeyError:
-                # Template had a key we don't have — fall back to assembled prompt
                 prompt = self._assemble_prompt(plan, context)
         else:
             prompt = self._assemble_prompt(plan, context)
 
-        # Append project context if available
         context_section = self._format_context(context)
         if context_section:
             prompt += "\n\n" + context_section
@@ -673,26 +723,32 @@ class TaskPlanner:
 
     # -- Private helpers --
 
-    async def _classify_request(self, text: str, client: anthropic.AsyncAnthropic) -> dict:
-        """Use Haiku to classify request type and extract known info."""
+    async def _classify_request(
+        self, text: str, client: genai.Client
+    ) -> dict:
+        """Use Gemini Flash to classify request type and extract known info."""
+        system = (
+            "Classify this development request. Respond with JSON only, no markdown.\n"
+            "Fields:\n"
+            "- task_type: build|fix|research|refactor|run|feature\n"
+            "- project: project name mentioned (or empty string)\n"
+            "- inferred: dict of any info you can extract from the request "
+            "(keys: tech_stack, details, error, target, goal, depth, output_format)\n"
+            "Only include inferred keys that are clearly stated.\n"
+            'Example: {"task_type": "build", "project": "my-app", '
+            '"inferred": {"tech_stack": "React", "details": "landing page with hero and pricing"}}'
+        )
         try:
-            response = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=300,
-                system=(
-                    "Classify this development request. Respond with JSON only, no markdown.\n"
-                    "Fields:\n"
-                    "- task_type: build|fix|research|refactor|run|feature\n"
-                    "- project: project name mentioned (or empty string)\n"
-                    "- inferred: dict of any info you can extract from the request "
-                    "(keys: tech_stack, details, error, target, goal, depth, output_format)\n"
-                    "Only include inferred keys that are clearly stated.\n"
-                    'Example: {"task_type": "build", "project": "roofo", '
-                    '"inferred": {"tech_stack": "React", "details": "landing page with hero and pricing"}}'
-                ),
-                messages=[{"role": "user", "content": text}],
+            config = genai_types.GenerateContentConfig(
+                system_instruction=system,
+                max_output_tokens=300,
             )
-            raw = response.content[0].text.strip()
+            response = await client.aio.models.generate_content(
+                model=_PLANNER_MODEL,
+                contents=text,
+                config=config,
+            )
+            raw = response.text.strip()
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
             return json.loads(raw)
@@ -703,35 +759,35 @@ class TaskPlanner:
     def _assemble_prompt(self, plan: Plan, context: dict) -> str:
         """Build a freeform prompt when no template matches."""
         lines = [
-            f"## Task",
-            f"{plan.original_request}",
+            "## Task",
+            plan.original_request,
             "",
         ]
 
         if plan.project_path:
-            lines.extend([f"## Working Directory", f"{plan.project_path}", ""])
+            lines += ["## Working Directory", plan.project_path, ""]
 
         if plan.answers.get("tech_stack"):
-            lines.extend([f"## Tech Stack", f"{plan.answers['tech_stack']}", ""])
+            lines += ["## Tech Stack", plan.answers["tech_stack"], ""]
 
         if plan.answers.get("details"):
-            lines.extend([f"## Details", f"{plan.answers['details']}", ""])
+            lines += ["## Details", plan.answers["details"], ""]
 
         if plan.answers.get("error"):
-            lines.extend([f"## Error", f"{plan.answers['error']}", ""])
+            lines += ["## Error", plan.answers["error"], ""]
 
         if plan.answers.get("expected"):
-            lines.extend([f"## Expected Behavior", f"{plan.answers['expected']}", ""])
+            lines += ["## Expected Behavior", plan.answers["expected"], ""]
 
         if plan.answers.get("goal"):
-            lines.extend([f"## Goal", f"{plan.answers['goal']}", ""])
+            lines += ["## Goal", plan.answers["goal"], ""]
 
-        lines.extend([
+        lines += [
             "## Acceptance Criteria",
             "- [ ] Task completed as described",
             "- [ ] No console errors",
             "- [ ] Clean, readable code",
-        ])
+        ]
 
         return "\n".join(lines)
 
@@ -743,16 +799,24 @@ class TaskPlanner:
         sections = []
 
         if context.get("claude_md"):
-            sections.append(f"## Project Instructions (CLAUDE.md)\n{context['claude_md']}")
+            sections.append(
+                f"## Project Instructions (CLAUDE.md / TASK.md)\n{context['claude_md']}"
+            )
 
         if context.get("package_json"):
-            sections.append(f"## package.json\n```json\n{context['package_json']}\n```")
+            sections.append(
+                f"## package.json\n```json\n{context['package_json']}\n```"
+            )
 
         if context.get("requirements_txt"):
-            sections.append(f"## requirements.txt\n```\n{context['requirements_txt']}\n```")
+            sections.append(
+                f"## requirements.txt\n```\n{context['requirements_txt']}\n```"
+            )
 
         if context.get("git_log"):
-            sections.append(f"## Recent Git History\n```\n{context['git_log']}\n```")
+            sections.append(
+                f"## Recent Git History\n```\n{context['git_log']}\n```"
+            )
 
         if context.get("directory_listing"):
             listing = "\n".join(context["directory_listing"])

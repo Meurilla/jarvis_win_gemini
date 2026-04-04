@@ -3,10 +3,13 @@ JARVIS Browser — Playwright-based web browsing capabilities.
 
 Provides search, page visits, screenshots, and multi-step research.
 Runs headless Chromium with realistic user agent to avoid blocking.
+
+Cross-platform: works on Windows, macOS, and Linux.
 """
 
 import asyncio
 import logging
+import platform
 import tempfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -14,10 +17,24 @@ from typing import Optional
 
 log = logging.getLogger("jarvis.browser")
 
-USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
+# Windows Chrome UA — matches the platform JARVIS is running on
+_OS = platform.system()
+if _OS == "Windows":
+    USER_AGENT = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+elif _OS == "Darwin":
+    USER_AGENT = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+else:
+    USER_AGENT = (
+        "Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+
 TIMEOUT_MS = 30_000
 
 
@@ -83,7 +100,7 @@ class JarvisBrowser:
             user_agent=USER_AGENT,
             viewport={"width": 1280, "height": 900},
         )
-        log.info("Browser launched (visible Chromium)")
+        log.info(f"Browser launched (visible Chromium, {_OS})")
 
     async def _new_page(self):
         """Create a new page in the browser context."""
@@ -94,6 +111,9 @@ class JarvisBrowser:
 
     async def search(self, query: str) -> list[SearchResult]:
         """Search DuckDuckGo and return top results."""
+        if not query:
+            return []
+
         page = await self._new_page()
         results = []
 
@@ -104,7 +124,6 @@ class JarvisBrowser:
                 wait_until="domcontentloaded",
             )
 
-            # Extract search results from DDG HTML version
             raw = await page.evaluate("""
                 () => {
                     const items = document.querySelectorAll('.result');
@@ -125,13 +144,11 @@ class JarvisBrowser:
                     ))
 
             log.info(f"Search '{query}' returned {len(results)} results")
-            # Let user see the search results for a moment
+            # Let user see the search results briefly
             await asyncio.sleep(2)
+
         except Exception as e:
             log.warning(f"Search failed for '{query}': {e}")
-        finally:
-            # Don't close the page — keep it visible
-            pass
 
         return results
 
@@ -148,13 +165,11 @@ class JarvisBrowser:
                 () => {
                     const title = document.title || '';
 
-                    // Try to get main content area first
                     const main = document.querySelector('main')
                         || document.querySelector('article')
                         || document.querySelector('[role="main"]')
                         || document.body;
 
-                    // Remove noise elements
                     const clone = main.cloneNode(true);
                     for (const el of clone.querySelectorAll(
                         'script, style, nav, header, footer, aside, .sidebar, .menu, .ad, .advertisement, iframe'
@@ -163,14 +178,13 @@ class JarvisBrowser:
                     }
 
                     const text = clone.innerText || clone.textContent || '';
-                    // Trim to reasonable size
                     const trimmed = text.substring(0, 5000).trim();
-                    return {
-                        title: title,
-                        text: trimmed,
-                    };
+                    return { title, text: trimmed };
                 }
             """)
+
+            # Let user see the page briefly
+            await asyncio.sleep(3)
 
             text = data.get("text", "")
             return PageContent(
@@ -180,8 +194,6 @@ class JarvisBrowser:
                 word_count=len(text.split()),
             )
 
-            # Let user see the page for a moment
-            await asyncio.sleep(3)
         except Exception as e:
             log.warning(f"Visit failed for '{url}': {e}")
             return PageContent(
@@ -190,7 +202,6 @@ class JarvisBrowser:
                 text_content=f"Failed to load page: {e}",
                 word_count=0,
             )
-        # Don't close — keep pages visible
 
     # -- Screenshot ------------------------------------------------------------
 
@@ -198,13 +209,14 @@ class JarvisBrowser:
         """Take screenshot of a page. Returns file path to PNG."""
         page = await self._new_page()
 
+        # Use mkstemp for a safe temp file if no path provided
+        tmp_fd = None
+        if not path:
+            tmp_fd, path = tempfile.mkstemp(suffix=".png", prefix="jarvis_screenshot_")
+
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=TIMEOUT_MS)
-            await page.wait_for_timeout(1000)  # let rendering settle
-
-            if not path:
-                tmp = tempfile.mktemp(suffix=".png", prefix="jarvis_screenshot_")
-                path = tmp
+            await page.wait_for_timeout(1000)
 
             await page.screenshot(path=path, full_page=True)
             log.info(f"Screenshot saved: {path}")
@@ -212,8 +224,22 @@ class JarvisBrowser:
 
         except Exception as e:
             log.warning(f"Screenshot failed for '{url}': {e}")
+            # Clean up empty temp file on failure
+            try:
+                if path and Path(path).exists() and Path(path).stat().st_size == 0:
+                    Path(path).unlink()
+            except Exception:
+                pass
             return ""
+
         finally:
+            # Close the file descriptor if we created a temp file
+            if tmp_fd is not None:
+                try:
+                    import os
+                    os.close(tmp_fd)
+                except Exception:
+                    pass
             await page.close()
 
     # -- Research (multi-step) -------------------------------------------------

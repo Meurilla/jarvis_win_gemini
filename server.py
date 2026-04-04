@@ -43,6 +43,7 @@ from pydantic import BaseModel
 
 from actions import execute_action, monitor_build, open_terminal, open_browser, open_claude_in_project, _generate_project_name, prompt_existing_terminal
 from work_mode import WorkSession, is_casual_question
+from conversation import ConversationSession
 from screen import get_active_windows, take_screenshot, describe_screen, format_windows_for_context
 from calendar_access import get_todays_events, get_upcoming_events, get_next_event, format_events_for_context, format_schedule_summary, refresh_cache as refresh_calendar_cache
 from mail_access import get_unread_count, get_unread_messages, get_recent_messages, search_mail, read_message, format_unread_summary, format_messages_for_context, format_messages_for_voice
@@ -1089,6 +1090,11 @@ async def _execute_prompt_project(project_name: str, prompt: str, work_session: 
         dispatch_registry.update_status(dispatch_id, "completed", response=full_response[:2000], summary=msg[:200])
         log.info(f"Project {project_name} dispatch complete ({len(full_response)} chars)")
 
+        # Note: conversation_session.mark_plan_complete() is handled
+        # via the next user message — session_context will reflect
+        # the completed dispatch from dispatch_registry automatically.
+        # No direct call needed here since we don't have session reference.
+
     except Exception as e:
         log.error(f"Prompt project failed: {e}", exc_info=True)
         try:
@@ -1193,6 +1199,7 @@ async def generate_response(
     conversation_history: list[dict],
     last_response: str = "",
     session_summary: str = "",
+    conversation_context: str = "",
 ) -> str:
     """Generate a JARVIS response using Gemini Flash."""
     now = datetime.now()
@@ -1232,6 +1239,9 @@ async def generate_response(
     # Three-tier memory — inject rolling summary of earlier conversation
     if session_summary:
         system += f"\n\nSESSION CONTEXT (earlier in this conversation):\n{session_summary}"
+
+    if conversation_context:
+        system += f"\n\nSESSION DECISIONS & PLAN:\n{conversation_context}"
 
     # Self-awareness — remind JARVIS of last response to avoid repetition
     if last_response:
@@ -1612,6 +1622,15 @@ def detect_action_fast(text: str) -> dict | None:
                              "what's the cost", "whats the cost", "api cost", "token usage",
                              "how expensive", "what's my bill"]):
         return {"action": "check_usage"}
+    
+    # Session memory queries
+    if any(p in t for p in [
+        "what did we decide", "what did we agree", "what was the plan",
+        "remind me what", "what have we discussed", "what did you say about",
+        "what are we building", "what's the plan", "whats the plan",
+        "what did we choose", "what tech stack", "what stack did we",
+    ]):
+        return {"action": "query_session"}
 
     return None  # Everything else goes to the LLM for conversational routing
 
@@ -1978,6 +1997,7 @@ async def voice_handler(ws: WebSocket):
     history: list[dict] = []
     work_session = WorkSession()
     planner = TaskPlanner()
+    conversation_session = ConversationSession()
 
     # Response cancellation — when new input arrives, cancel current response
     _current_response_id = 0
@@ -2078,6 +2098,7 @@ async def voice_handler(ws: WebSocket):
 
             voice_state["last_user_time"] = time.time()
             log.info(f"User: {user_text}")
+            conversation_session.add_exchange("user", user_text)
             await ws.send_json({"type": "status", "state": "thinking"})
 
             # Lazy project scan on first message
@@ -2115,6 +2136,7 @@ async def voice_handler(ws: WebSocket):
                         Path(path, "CLAUDE.md").write_text(prompt)
                         did = dispatch_registry.register(name, path, prompt[:200])
                         asyncio.create_task(_execute_prompt_project(name, prompt, work_session, ws, dispatch_id=did, history=history, voice_state=voice_state))
+                        conversation_session.log_plan(planner.active_plan)
                         planner.reset()
                         response_text = "Building it now, sir."
                     elif planner.active_plan and planner.active_plan.confirmed is False and planner.active_plan.current_question_index >= len(planner.active_plan.pending_questions):
@@ -2128,6 +2150,7 @@ async def voice_handler(ws: WebSocket):
                             Path(path, "CLAUDE.md").write_text(prompt)
                             did = dispatch_registry.register(name, path, prompt[:200])
                             asyncio.create_task(_execute_prompt_project(name, prompt, work_session, ws, dispatch_id=did, history=history, voice_state=voice_state))
+                            conversation_session.log_plan(planner.active_plan)
                             planner.reset()
                             response_text = "On it, sir."
                         elif result["cancelled"]:
@@ -2158,6 +2181,7 @@ async def voice_handler(ws: WebSocket):
                             cached_projects, history,
                             last_response=last_jarvis_response,
                             session_summary=session_summary,
+                            conversation_context=conversation_session.get_context(),
                         )
                     else:
                         # Send to work session (full power)
@@ -2249,6 +2273,10 @@ async def voice_handler(ws: WebSocket):
                             response_text = format_tasks_for_voice(tasks)
                         elif action["action"] == "check_usage":
                             response_text = get_usage_summary()
+                        elif action["action"] == "query_session":
+                            response_text = await conversation_session.query(
+                                user_text, _gemini_client
+                            )
                         else:
                             response_text = "Understood, sir."
                     else:
@@ -2260,6 +2288,7 @@ async def voice_handler(ws: WebSocket):
                                 cached_projects, history,
                                 last_response=last_jarvis_response,
                                 session_summary=session_summary,
+                                conversation_context=conversation_session.get_context(),
                             )
 
                             # Check for action tags embedded in LLM response
@@ -2439,6 +2468,7 @@ async def voice_handler(ws: WebSocket):
                     await ws.send_json({"type": "text", "text": response_text})
                     await ws.send_json({"type": "status", "state": "idle"})
                 log.info(f"JARVIS: {response_text}")
+                conversation_session.add_exchange("assistant", response_text)
                 last_jarvis_response = response_text
 
             except Exception as e:
@@ -2460,6 +2490,7 @@ async def voice_handler(ws: WebSocket):
         log.error(f"WebSocket error: {e}", exc_info=True)
     finally:
         task_manager.unregister_websocket(ws)
+        conversation_session.close("disconnected")
 
 
 # ---------------------------------------------------------------------------
