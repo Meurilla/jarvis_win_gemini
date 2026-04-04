@@ -71,7 +71,7 @@ class QAAgent:
                 contents=prompt,
                 config=config,
             )
-            raw = response.text.strip()
+            raw = (response.text or "").strip()
 
             if "```" in raw:
                 raw = raw.split("```")[1]
@@ -135,7 +135,7 @@ class QAAgent:
                 contents=prompt,
                 config=config,
             )
-            result = response.text.strip()
+            result = (response.text or "").strip()
             return {"status": "completed", "result": result, "error": "", "attempt": attempt + 1}
 
         except Exception as e:

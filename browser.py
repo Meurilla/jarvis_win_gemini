@@ -194,6 +194,7 @@ class JarvisBrowser:
     async def _new_page(self):
         """Open a new page in the shared browser context."""
         await self._ensure_browser()
+        assert self._context is not None
         return await self._context.new_page()
 
     async def _safe_goto(self, page, url: str) -> bool:

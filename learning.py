@@ -30,7 +30,7 @@ class ContextSuggestion:
 class UsageLearner:
     """Tracks usage patterns and suggests context based on history."""
 
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or str(DB_PATH)
         self.db = sqlite3.connect(self.db_path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
@@ -90,7 +90,7 @@ class UsageLearner:
     def suggest_context(
         self,
         user_text: str,
-        known_projects: list[dict] = None,
+        known_projects: Optional[list[dict]] = None,
     ) -> Optional[ContextSuggestion]:
         """Suggest relevant context based on user text and recent patterns.
 

@@ -17,6 +17,7 @@ import sqlite3
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 from google import genai
 from google.genai import types as genai_types
@@ -109,6 +110,7 @@ def remember(content: str, mem_type: str = "fact", source: str = "", importance:
         (mem_type, content, source, importance, time.time())
     )
     mem_id = cur.lastrowid
+    assert mem_id is not None
     # Update FTS
     conn.execute(
         "INSERT INTO memory_fts (rowid, content, type, source) VALUES (?, ?, ?, ?)",
@@ -180,14 +182,13 @@ def get_important_memories(limit: int = 10) -> list[dict]:
     conn.close()
     return [dict(r) for r in results]
 
-
 # ---------------------------------------------------------------------------
 # Tasks
 # ---------------------------------------------------------------------------
 
 def create_task(title: str, description: str = "", priority: str = "medium",
                 due_date: str = "", due_time: str = "", project: str = "",
-                tags: list[str] = None) -> int:
+                tags: Optional[list[str]] = None) -> int:
     """Create a task. Returns task ID."""
     conn = _get_db()
     cur = conn.execute(
@@ -197,6 +198,7 @@ def create_task(title: str, description: str = "", priority: str = "medium",
          project, json.dumps(tags or []), time.time())
     )
     task_id = cur.lastrowid
+    assert task_id is not None
     conn.execute(
         "INSERT INTO task_fts (rowid, title, description, project, notes) VALUES (?, ?, ?, ?, ?)",
         (task_id, title, description, project, "")
@@ -207,7 +209,7 @@ def create_task(title: str, description: str = "", priority: str = "medium",
     return task_id
 
 
-def get_open_tasks(project: str = None) -> list[dict]:
+def get_open_tasks(project: Optional[str] = None) -> list[dict]:
     """Get all open/in-progress tasks, optionally filtered by project."""
     conn = _get_db()
     if project:
@@ -271,7 +273,7 @@ def search_tasks(query: str, limit: int = 10) -> list[dict]:
 # Notes
 # ---------------------------------------------------------------------------
 
-def create_note(content: str, title: str = "", topic: str = "", tags: list[str] = None) -> int:
+def create_note(content: str, title: str = "", topic: str = "", tags: Optional[list[str]] = None) -> int:
     """Create a note. Returns note ID."""
     conn = _get_db()
     now = time.time()
@@ -280,6 +282,7 @@ def create_note(content: str, title: str = "", topic: str = "", tags: list[str] 
         (title, content, topic, json.dumps(tags or []), now, now)
     )
     note_id = cur.lastrowid
+    assert note_id is not None
     conn.execute(
         "INSERT INTO note_fts (rowid, title, content, topic) VALUES (?, ?, ?, ?)",
         (note_id, title, content, topic)
@@ -341,6 +344,7 @@ def build_memory_context(user_message: str) -> str:
         parts.append("HIGH PRIORITY TASKS:\n" + "\n".join(task_lines))
 
     # Search memories relevant to what user is saying
+    relevant = []
     if len(user_message) > 5:
         relevant = recall(user_message, limit=3)
         if relevant:
@@ -356,7 +360,6 @@ def build_memory_context(user_message: str) -> str:
             parts.append("KEY FACTS:\n" + "\n".join(imp_lines[:3]))
 
     return "\n\n".join(parts) if parts else ""
-
 
 def format_tasks_for_voice(tasks: list[dict]) -> str:
     """Format tasks for voice response."""
@@ -441,7 +444,7 @@ async def extract_memories(user_text: str, jarvis_response: str, _unused_client=
             contents=f"User: {user_text}\nJARVIS: {jarvis_response}",
             config=config,
         )
-        text = response.text.strip()
+        text = (response.text or "").strip()
 
         # Strip markdown fences if Gemini wraps in ```json
         if text.startswith("```"):

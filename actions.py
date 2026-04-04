@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 from urllib.parse import quote
 
 log = logging.getLogger("jarvis.actions")
@@ -244,7 +245,7 @@ async def monitor_build(project_dir: str, ws=None, synthesize_fn=None) -> None:
 # Action router
 # ---------------------------------------------------------------------------
 
-async def execute_action(intent: dict, projects: list = None) -> dict:
+async def execute_action(intent: dict, projects: Optional[list[dict]] = None) -> dict:
     """Route a classified intent to the right action function."""
     action = intent.get("action", "chat")
     target = intent.get("target", "")

@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -30,7 +31,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 from google import genai
 from google.genai import types as genai_types
@@ -43,6 +44,9 @@ from pydantic import BaseModel
 
 from actions import execute_action, monitor_build, open_terminal, open_browser, open_claude_in_project, _generate_project_name, prompt_existing_terminal
 from work_mode import WorkSession, is_casual_question
+from qa import qa_agent
+from tracking import success_tracker
+from suggestions import suggest_followup
 from conversation import ConversationSession
 from browser import JarvisBrowser, ResearchResult
 from screen import get_active_windows, take_screenshot, describe_screen, format_windows_for_context
@@ -385,48 +389,100 @@ class ClaudeTaskManager:
         return name
 
     async def _run_task(self, task: ClaudeTask):
-        """Open a Terminal window and run claude code visibly."""
+        """Open a terminal window and run the agent visibly."""
         task.status = "running"
         task.started_at = datetime.now()
 
         # Create project directory if it doesn't exist
         work_dir = task.working_dir
         if work_dir == "." or not work_dir:
-            # Create a new project folder on Desktop
             project_name = self._generate_project_name(task.prompt)
             work_dir = str(DESKTOP_PATH / project_name)
             os.makedirs(work_dir, exist_ok=True)
             task.working_dir = work_dir
 
-        # Write the prompt to a temp file so we can pipe it to claude
+        # Write prompt to file — explicit utf-8 to avoid cp1252 corruption on Windows
         prompt_file = Path(work_dir) / ".jarvis_prompt.md"
-        prompt_file.write_text(task.prompt)
+        prompt_file.write_text(task.prompt, encoding="utf-8")
 
-        # Open Terminal.app with claude running in the project directory
-        applescript = f'''
-        tell application "Terminal"
-            activate
-            set newTab to do script "cd {work_dir} && cat .jarvis_prompt.md | claude -p --dangerously-skip-permissions | tee .jarvis_output.txt; echo '\\n--- JARVIS TASK COMPLETE ---'"
-        end tell
-        '''
+        output_file = Path(work_dir) / ".jarvis_output.txt"
 
-        process = await asyncio.create_subprocess_exec(
-            "osascript", "-e", applescript,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        # Resolve agent CLI (gemini, claude, etc.)
+        agent = shutil.which("gemini") or shutil.which("claude")
+        if not agent:
+            task.status = "failed"
+            task.error = "No agent CLI found. Install Gemini CLI or Claude CLI."
+            task.completed_at = datetime.now()
+            await self._notify({
+                "type": "task_complete",
+                "task_id": task.id,
+                "status": task.status,
+                "summary": task.error,
+            })
+            return
+
+        # Build the shell command — platform-specific terminal launcher
+        if sys.platform == "win32":
+            # Escape backslashes in path for cmd.exe
+            safe_dir = work_dir.replace("\\", "\\\\")
+            inner_cmd = (
+                f'cd /d "{work_dir}" && '
+                f'"{agent}" -p < .jarvis_prompt.md '
+                f'> .jarvis_output.txt 2>&1 && '
+                f'echo. >> .jarvis_output.txt && '
+                f'echo --- JARVIS TASK COMPLETE --- >> .jarvis_output.txt'
+            )
+            # Prefer Windows Terminal, fall back to cmd.exe
+            wt = shutil.which("wt")
+            if wt:
+                launch_cmd = [wt, "new-tab", "--", "cmd.exe", "/k", inner_cmd]
+            else:
+                launch_cmd = ["cmd.exe", "/k", inner_cmd]
+
+            process = await asyncio.create_subprocess_exec(
+                *launch_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        else:
+            # Linux — try common terminal emulators in order
+            inner_cmd = (
+                f'cd "{work_dir}" && '
+                f'"{agent}" -p < .jarvis_prompt.md '
+                f'| tee .jarvis_output.txt; '
+                f'echo "\\n--- JARVIS TASK COMPLETE ---" >> .jarvis_output.txt'
+            )
+            term = (
+                shutil.which("gnome-terminal") or
+                shutil.which("xterm") or
+                shutil.which("konsole")
+            )
+            if term:
+                if "gnome-terminal" in term:
+                    launch_cmd = [term, "--", "bash", "-c", inner_cmd]
+                else:
+                    launch_cmd = [term, "-e", f"bash -c '{inner_cmd}'"]
+            else:
+                # No GUI terminal — run directly in background
+                launch_cmd = ["bash", "-c", inner_cmd]
+
+            process = await asyncio.create_subprocess_exec(
+                *launch_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
         await process.communicate()
         task.pid = process.pid
 
-        # Monitor the output file for completion
-        output_file = Path(work_dir) / ".jarvis_output.txt"
+        # Monitor output file for completion
         start = time.time()
         timeout = 600  # 10 minutes
 
         while time.time() - start < timeout:
             await asyncio.sleep(5)
             if output_file.exists():
-                content = output_file.read_text()
+                content = output_file.read_text(encoding="utf-8", errors="replace")
                 if "--- JARVIS TASK COMPLETE ---" in content or len(content) > 100:
                     task.result = content.replace("--- JARVIS TASK COMPLETE ---", "").strip()
                     task.status = "completed"
@@ -437,7 +493,6 @@ class ClaudeTaskManager:
 
         task.completed_at = datetime.now()
 
-        # Notify via WebSocket
         await self._notify({
             "type": "task_complete",
             "task_id": task.id,
@@ -448,7 +503,7 @@ class ClaudeTaskManager:
         # Clean up prompt file
         try:
             prompt_file.unlink()
-        except:
+        except Exception:
             pass
 
         # Auto-QA on completed tasks
@@ -680,19 +735,20 @@ def _to_gemini_contents(messages: list[dict]) -> list[dict]:
 async def _call_gemini(
     system: str,
     messages: list[dict],
-    model_name: str = "gemini-3-flash-preview",
+    model_name: str = "gemini-2.0-flash",
     max_tokens: int = 500,
     thinking_budget: int = 0,
 ) -> tuple[str, int, int]:
     """Call the Gemini API. Returns (text, input_tokens, output_tokens).
 
     model_name options:
-      "gemini-3-flash-preview-preview"  — high-frequency calls (voice, intent, summaries): 10k RPD
-      "gemini-2.5-pro"          — low-frequency calls (deep research, planning): 1k RPD
+        "gemini-2.0-flash"   — high-frequency calls (voice, intent, summaries)
+        "gemini-2.5-pro"     — low-frequency calls (deep research, planning)
 
     thinking_budget:
-      0   — thinking disabled (default). Use for voice loop — fastest, no token waste.
-     -1   — dynamic thinking (model decides). Use for research/planning calls.
+        0   — thinking disabled (default). Use for voice loop — fastest, no token waste.
+        -1   — dynamic thinking (model decides how much to think). Use for research/planning.
+            Maps to ThinkingConfig(thinking_budget=-1) in the SDK.
     """
     client = _gemini_client
     if client is None:
@@ -703,18 +759,24 @@ async def _call_gemini(
     try:
         contents = _to_gemini_contents(messages)
 
-        config_kwargs = dict(
-            system_instruction=system,
-            max_output_tokens=max_tokens,
-        )
-        # Only pass thinking_config when the model supports it
-        # (flash-preview and pro support it; older models may not)
-        try:
-            config_kwargs["thinking_config"] = genai_types.ThinkingConfig(
-                thinking_budget=thinking_budget,
-            )
-        except AttributeError:
-            pass  # SDK version doesn't expose ThinkingConfig — fine, skip it
+        # Use Any-typed dict so Pylance doesn't constrain value types
+        # to str | int — ThinkingConfig and other SDK objects are valid values.
+        config_kwargs: dict[str, Any] = {
+            "system_instruction": system,
+            "max_output_tokens": max_tokens,
+        }
+
+        # Only attach ThinkingConfig when thinking is requested.
+        # Skipping it entirely on the default (0) path avoids SDK version
+        # concerns on the hot voice loop path.
+        if thinking_budget != 0:
+            try:
+                config_kwargs["thinking_config"] = genai_types.ThinkingConfig(
+                    thinking_budget=thinking_budget,
+                )
+            except AttributeError:
+                # SDK version doesn't expose ThinkingConfig — degrade silently.
+                log.debug("ThinkingConfig not available in this SDK version, skipping")
 
         config = genai_types.GenerateContentConfig(**config_kwargs)
         response = await client.aio.models.generate_content(
@@ -722,14 +784,16 @@ async def _call_gemini(
             contents=contents,
             config=config,
         )
-        text = response.text
+
+        # response.text is str | None — guard so return type stays str.
+        text: str = response.text or ""
         inp = getattr(response.usage_metadata, "prompt_token_count", 0) or 0
         out = getattr(response.usage_metadata, "candidates_token_count", 0) or 0
         return text, inp, out
+
     except Exception as e:
         log.error(f"Gemini API error: {e}")
         return f"Apologies, sir. Language systems are unavailable: {e}", 0, 0
-
 
 async def classify_intent(text: str) -> dict:
     """Classify every user message using Gemini Flash.
@@ -878,7 +942,7 @@ async def _execute_research(target: str, ws=None):
         # ── Stage 1: Scrape ──────────────────────────────────────────────────
         log.info(f"Research stage 1 — scraping: {target}")
  
-        browser: JarvisBrowser = getattr(app.state, "browser", None)
+        browser: Optional[JarvisBrowser] = getattr(app.state, "browser", None)
         research_data: ResearchResult | None = None
  
         if browser:
@@ -1091,7 +1155,7 @@ def _find_project_dir(project_name: str) -> str | None:
     return None
 
 
-async def _execute_prompt_project(project_name: str, prompt: str, work_session: WorkSession, ws, dispatch_id: int = None, history: list[dict] = None, voice_state: dict = None):
+async def _execute_prompt_project(project_name: str, prompt: str, work_session: WorkSession, ws, dispatch_id: int = 0, history: Optional[list[dict]] = None, voice_state: Optional[dict] = None):
     """Dispatch a prompt to Claude Code in a project directory.
 
     Runs entirely in the background. JARVIS returns to conversation mode
@@ -1285,7 +1349,7 @@ async def synthesize_speech(text: str) -> Optional[bytes]:
         communicate = edge_tts.Communicate(clean, EDGE_TTS_VOICE)
         audio_chunks: list[bytes] = []
         async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
+            if chunk["type"] == "audio" and "data" in chunk:
                 audio_chunks.append(chunk["data"])
         if audio_chunks:
             _session_tokens["tts_calls"] += 1
@@ -1824,7 +1888,7 @@ async def handle_show_recent() -> str:
 _active_lookups: dict[str, dict] = {}  # id -> {"type": str, "status": str, "started": float}
 
 
-async def _lookup_and_report(lookup_type: str, lookup_fn, ws, history: list[dict] = None, voice_state: dict = None):
+async def _lookup_and_report(lookup_type: str, lookup_fn, ws, history: Optional[list[dict]] = None, voice_state: Optional[dict] = None):
     """Run a slow lookup, then speak the result back.
 
     JARVIS stays conversational — this runs completely off the main path.

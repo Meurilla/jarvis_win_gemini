@@ -156,6 +156,8 @@ class DispatchRegistry:
             (project_name, project_path, prompt[:RESPONSE_MAX_CHARS], now, now),
         )
         dispatch_id = cur.lastrowid
+        if dispatch_id is None:
+            raise RuntimeError("Failed to register dispatch row")
         conn.commit()
         _after_write()
         log.info(f"Registered dispatch #{dispatch_id}: {project_name}")
@@ -165,8 +167,8 @@ class DispatchRegistry:
         self,
         dispatch_id: int,
         status: str,
-        response: str = None,
-        summary: str = None,
+        response: Optional[str] = None,
+        summary: Optional[str] = None,
     ):
         """Update dispatch status, optionally storing response and summary."""
         conn = _get_db()

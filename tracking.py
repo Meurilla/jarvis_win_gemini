@@ -18,7 +18,7 @@ DB_PATH = Path(__file__).parent / "jarvis_data.db"
 class SuccessTracker:
     """Track task success rates and usage patterns."""
 
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or str(DB_PATH)
         self.db = sqlite3.connect(self.db_path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
@@ -121,7 +121,7 @@ class SuccessTracker:
         except Exception as e:
             log.warning(f"Failed to mark suggestion: {e}")
 
-    def get_success_rate(self, task_type: str = None) -> dict:
+    def get_success_rate(self, task_type: Optional[str] = None) -> dict:
         """Get success rate stats, optionally filtered by task type."""
         try:
             if task_type:
@@ -160,7 +160,7 @@ class SuccessTracker:
             log.warning(f"Failed to get top actions: {e}")
             return []
 
-    def get_avg_duration(self, task_type: str = None) -> float:
+    def get_avg_duration(self, task_type: Optional[str] = None) -> float:
         """Get average task duration in seconds."""
         try:
             if task_type:
@@ -183,3 +183,5 @@ class SuccessTracker:
             self.db.close()
         except Exception:
             pass
+
+success_tracker = SuccessTracker()

@@ -177,7 +177,7 @@ async def _classify_planning_mode_llm(
             contents=text,
             config=config,
         )
-        raw = response.text.strip()
+        raw = (response.text or "").strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
 
@@ -748,7 +748,7 @@ class TaskPlanner:
                 contents=text,
                 config=config,
             )
-            raw = response.text.strip()
+            raw = (response.text or "").strip()
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
             return json.loads(raw)

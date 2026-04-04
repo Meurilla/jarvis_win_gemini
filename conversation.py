@@ -11,6 +11,7 @@ Planner writes its completed decisions INTO this session via log_plan().
 
 import logging
 import time
+import json
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Optional
@@ -302,7 +303,6 @@ class ConversationSession:
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
 
-            import json
             data = json.loads(raw)
 
             field_name = data.get("field", "other")

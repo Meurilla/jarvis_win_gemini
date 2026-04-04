@@ -63,7 +63,7 @@ class VersionStats:
 class ABTester:
     """A/B testing framework for prompt templates."""
 
-    def __init__(self, db_path: str = None, templates_dir: str = None):
+    def __init__(self, db_path: str | None = None, templates_dir: str | None = None):
         self.db_path = db_path or str(DB_PATH)
         self.templates_dir = Path(templates_dir) if templates_dir else TEMPLATES_DIR
         self.db = sqlite3.connect(self.db_path, check_same_thread=False)

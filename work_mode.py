@@ -78,7 +78,7 @@ class WorkSession:
     def status(self) -> str:
         return self._status
 
-    async def start(self, working_dir: str, project_name: str = None):
+    async def start(self, working_dir: str, project_name: str | None = None):
         """Start or switch to a project session."""
         self._working_dir = working_dir
         # Use Path().name for Windows-safe directory name extraction
@@ -179,7 +179,7 @@ class WorkSession:
                 contents=contents,
                 config=config,
             )
-            result = response.text.strip()
+            result = (response.text or "").strip()
             self._api_history.append({"role": "assistant", "content": result})
             self._status = "done"
             log.info(f"API work mode response for {self._project_name} ({len(result)} chars)")
