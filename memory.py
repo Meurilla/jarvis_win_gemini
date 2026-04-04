@@ -12,12 +12,20 @@ so JARVIS gets smarter over time.
 
 import json
 import logging
+import os
 import sqlite3
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from google import genai
+from google.genai import types as genai_types
+
 log = logging.getLogger("jarvis.memory")
+
+# Picks up the key already configured by server.py at startup.
+# If memory.py is used standalone, falls back to the env var directly.
+_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 DB_PATH = Path(__file__).parent / "data" / "jarvis.db"
 
@@ -402,31 +410,43 @@ def format_plan_for_voice(tasks: list[dict], events: list[dict]) -> str:
 # Memory extraction — learn from conversations
 # ---------------------------------------------------------------------------
 
-async def extract_memories(user_text: str, jarvis_response: str, anthropic_client) -> list[str]:
+async def extract_memories(user_text: str, jarvis_response: str, _unused_client=None) -> list[str]:
     """After a conversation turn, extract any facts worth remembering.
 
-    Uses Haiku to decide if anything in the exchange is worth storing.
-    Returns list of memories stored.
+    Uses Gemini Flash to decide if anything in the exchange is worth storing.
+    The third argument is ignored (kept for call-site compatibility).
+    Returns list of memory strings stored.
     """
-    if not anthropic_client or len(user_text) < 15:
+    if len(user_text) < 15:
+        return []
+
+    key = _GEMINI_API_KEY
+    if not key:
         return []
 
     try:
-        response = await anthropic_client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=200,
-            system=(
+        client = genai.Client(api_key=key)
+        config = genai_types.GenerateContentConfig(
+            system_instruction=(
                 "Extract facts worth remembering from this conversation. "
                 "Only extract CONCRETE facts: preferences, decisions, names, dates, plans, goals. "
                 "NOT opinions, greetings, or casual chat. "
-                "Return JSON array of objects: [{\"type\": \"fact|preference|project|person|decision\", \"content\": \"...\", \"importance\": 1-10}] "
-                "Return [] if nothing worth remembering. Be very selective."
+                'Return a JSON array of objects: [{"type": "fact|preference|project|person|decision", "content": "...", "importance": 1-10}] '
+                "Return [] if nothing worth remembering. Be very selective — most exchanges have nothing."
             ),
-            messages=[{"role": "user", "content": f"User: {user_text}\nJARVIS: {jarvis_response}"}],
+            max_output_tokens=200,
         )
+        response = await client.aio.models.generate_content(
+            model="gemini-3-flash-preview",
+            contents=f"User: {user_text}\nJARVIS: {jarvis_response}",
+            config=config,
+        )
+        text = response.text.strip()
 
-        text = response.content[0].text.strip()
-        # Parse JSON
+        # Strip markdown fences if Gemini wraps in ```json
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
         if text.startswith("["):
             items = json.loads(text)
             stored = []
@@ -440,6 +460,7 @@ async def extract_memories(user_text: str, jarvis_response: str, anthropic_clien
                     )
                     stored.append(item["content"])
             return stored
+
     except Exception as e:
         log.debug(f"Memory extraction failed: {e}")
 

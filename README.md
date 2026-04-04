@@ -1,6 +1,6 @@
 # JARVIS
 
-**Just A Rather Very Intelligent System.**
+**Just A Rather Very Intelligent System. - Windows & Gemini Edition**
 
 A voice-first AI assistant that runs on your Mac. Talk to it, and it talks back -- with a British accent, dry wit, and an audio-reactive particle orb straight out of the MCU.
 
@@ -29,13 +29,13 @@ JARVIS connects to your Apple Calendar, Mail, and Notes. It can browse the web, 
 
 ## Requirements
 
-- **macOS** (uses AppleScript for Calendar, Mail, Notes integration)
+- **Windows 10/11** (uses AppleScript for Calendar, Mail, Notes integration)
 - **Python 3.11+**
 - **Node.js 18+**
 - **Google Chrome** (required for Web Speech API)
-- **Anthropic API key** -- powers the AI brain ([get one here](https://console.anthropic.com/))
-- **Fish Audio API key** -- powers the voice ([get one here](https://fish.audio/))
-- **Claude Code CLI** -- for spawning dev tasks ([install here](https://docs.anthropic.com/en/docs/claude-code))
+- **Google Gemini API key** -- powers the AI brain ([get one here](https://aistudio.google.com/api-keys/))
+- Currently Stubbed - **Fish Audio API key** -- powers the voice ([get one here](https://fish.audio/))
+- **Gemini CLI** -- for spawning dev tasks (Fallback to Gemini API)
 
 ## Quick Start (with Claude Code)
 
@@ -87,8 +87,8 @@ Edit your `.env` file:
 
 ```env
 # Required
-ANTHROPIC_API_KEY=your-anthropic-api-key-here
-FISH_API_KEY=your-fish-audio-api-key-here
+GEMINI_API_KEY=your-gemini-api-key-here
+FISH_API_KEY=your-fish-audio-api-key-here - Stubbed
 
 # Optional -- your name (JARVIS will address you personally)
 USER_NAME=Tony
@@ -101,7 +101,7 @@ CALENDAR_ACCOUNTS=you@gmail.com,work@company.com
 ## Architecture
 
 ```
-Microphone -> Web Speech API -> WebSocket -> FastAPI -> Claude (Haiku) -> Fish Audio TTS -> WebSocket -> Speaker
+Microphone -> Web Speech API -> WebSocket -> FastAPI -> Gemini 3 Flash -> edge TTS -> WebSocket -> Speaker
                                                 |
                                                 v
                                         Claude Code Tasks
@@ -117,10 +117,10 @@ Microphone -> Web Speech API -> WebSocket -> FastAPI -> Claude (Haiku) -> Fish A
 | Backend | FastAPI + Python (`server.py`, ~2300 lines) |
 | Frontend | Vite + TypeScript + Three.js |
 | Communication | WebSocket (JSON messages + binary audio) |
-| AI (fast) | Claude Haiku -- low-latency voice responses |
-| AI (deep) | Claude Opus -- research and complex tasks |
-| TTS | Fish Audio with JARVIS voice model |
-| System | AppleScript for all macOS integrations |
+| AI (fast) | Gemini 3 Flash -- low-latency voice responses |
+| AI (deep) | Gemini 2.5 Pro -- research and complex tasks |
+| TTS | edge TTS with brittish voice |
+| System | AppleScript for all macOS integrations | - Migrating all these to Windows variants
 
 ## How the Voice Loop Works
 

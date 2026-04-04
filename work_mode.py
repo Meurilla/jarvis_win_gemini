@@ -1,38 +1,70 @@
 """
-JARVIS Work Mode — persistent claude -p sessions tied to projects.
+JARVIS Work Mode — agentic coding sessions tied to project directories.
 
-JARVIS can connect to any project directory and maintain a conversation
-with Claude Code. Uses --continue to resume the most recent session
-in that directory, so context persists across messages.
+Tries to use an agentic CLI tool (Gemini CLI by default) for full file-editing
+capability. Falls back to direct Gemini API calls if no CLI is available —
+responses will be text-only in that mode (no file writes).
 
-The user sees Claude Code working in their Terminal window.
-JARVIS reads the responses via subprocess, summarizes, and reports back.
+Configure the CLI tool via the AGENT_CLI env var, e.g.:
+  AGENT_CLI=gemini   (default — Gemini CLI)
+  AGENT_CLI=none     (force direct API mode)
 """
 
 import asyncio
 import json
 import logging
+import os
 import shutil
 from pathlib import Path
+
+from google import genai
+from google.genai import types as genai_types
 
 log = logging.getLogger("jarvis.work_mode")
 
 SESSION_FILE = Path(__file__).parent / "data" / "active_session.json"
 
+# Which CLI tool to use for agentic sessions. Resolved once at import time.
+_AGENT_CLI_ENV = os.getenv("AGENT_CLI", "gemini")
+_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+
+def _resolve_agent_cli() -> str | None:
+    """Find the agentic CLI binary. Returns full path or None."""
+    if _AGENT_CLI_ENV.lower() == "none":
+        return None
+    # Try the configured name, then common fallbacks
+    for name in [_AGENT_CLI_ENV, "gemini", "gemini-cli"]:
+        path = shutil.which(name)
+        if path:
+            log.info(f"Agentic CLI found: {path}")
+            return path
+    log.warning(
+        "No agentic CLI found (tried: gemini, gemini-cli). "
+        "Work mode will use direct Gemini API — file editing unavailable. "
+        "Install Gemini CLI or set AGENT_CLI=<path> to enable full work mode."
+    )
+    return None
+
+
+_AGENT_CLI_PATH: str | None = _resolve_agent_cli()
+
 
 class WorkSession:
-    """A claude -p session tied to a project directory.
+    """An agentic session tied to a project directory.
 
-    Each project gets its own session. JARVIS can switch between projects
-    and --continue picks up where the last message left off.
+    Uses CLI subprocess when available (full file-editing).
+    Falls back to direct Gemini API when not (text responses only).
     """
 
     def __init__(self):
         self._active = False
         self._working_dir: str | None = None
         self._project_name: str | None = None
-        self._message_count = 0  # Track if this is first message (no --continue)
-        self._status = "idle"  # idle, working, done
+        self._message_count = 0
+        self._status = "idle"
+        # Conversation history for API fallback mode
+        self._api_history: list[dict] = []
 
     @property
     def active(self) -> bool:
@@ -49,33 +81,33 @@ class WorkSession:
     async def start(self, working_dir: str, project_name: str = None):
         """Start or switch to a project session."""
         self._working_dir = working_dir
-        self._project_name = project_name or working_dir.split("/")[-1]
+        # Use Path().name for Windows-safe directory name extraction
+        self._project_name = project_name or Path(working_dir).name
         self._active = True
         self._message_count = 0
         self._status = "idle"
+        self._api_history = []
         log.info(f"Work mode started: {self._project_name} ({working_dir})")
 
     async def send(self, user_text: str) -> str:
-        """Send a message to claude -p and get the full response.
+        """Send a message and get a response.
 
-        First message in a session: fresh claude -p
-        Subsequent messages: claude -p --continue (resumes last session in dir)
+        If a CLI tool is available: spawns a subprocess in the project directory.
+        Otherwise: calls the Gemini API directly (no file access).
         """
-        claude_path = shutil.which("claude")
-        if not claude_path:
-            return "Claude CLI not found on this system."
-
-        cmd = [
-            claude_path, "-p",
-            "--output-format", "text",
-            "--dangerously-skip-permissions",
-        ]
-
-        # Use --continue for subsequent messages to maintain context
-        if self._message_count > 0:
-            cmd.append("--continue")
-
         self._status = "working"
+        if _AGENT_CLI_PATH:
+            result = await self._send_via_cli(user_text)
+        else:
+            result = await self._send_via_api(user_text)
+        self._message_count += 1
+        return result
+
+    async def _send_via_cli(self, user_text: str) -> str:
+        """Run the agentic CLI as a subprocess."""
+        # Build command — no --continue or --dangerously-skip-permissions
+        # as these are Claude-specific flags not supported by Gemini CLI
+        cmd = [_AGENT_CLI_PATH, "-p"]
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -92,25 +124,70 @@ class WorkSession:
             )
 
             response = stdout.decode().strip()
-            self._message_count += 1
             self._status = "done"
 
             if process.returncode != 0:
                 error = stderr.decode().strip()[:200]
-                log.error(f"claude -p error: {error}")
+                log.error(f"Agent CLI error: {error}")
                 self._status = "error"
                 return f"Hit a problem, sir: {error}"
 
-            log.info(f"Claude Code response for {self._project_name} ({len(response)} chars)")
+            log.info(f"Agent CLI response for {self._project_name} ({len(response)} chars)")
             return response
 
         except asyncio.TimeoutError:
-            log.error("claude -p timed out after 300s")
             self._status = "timeout"
             return "That's taking longer than expected, sir. The operation timed out."
         except Exception as e:
-            log.error(f"Work mode error: {e}")
             self._status = "error"
+            log.error(f"CLI work mode error: {e}")
+            return f"Something went wrong, sir: {str(e)[:100]}"
+
+    async def _send_via_api(self, user_text: str) -> str:
+        """Fall back to direct Gemini API when no CLI is installed."""
+        if not _GEMINI_API_KEY:
+            self._status = "error"
+            return "No Gemini API key configured, sir."
+
+        try:
+            client = genai.Client(api_key=_GEMINI_API_KEY)
+            system = (
+                f"You are an expert software developer working on the project at: {self._working_dir}. "
+                "Help the user with coding tasks, architecture decisions, and debugging. "
+                "Note: you cannot directly edit files in this mode — provide complete file contents "
+                "and clear instructions for the user to apply changes."
+            )
+
+            # Maintain rolling conversation history
+            self._api_history.append({"role": "user", "content": user_text})
+
+            # Convert history to Gemini format, alternating roles
+            contents = []
+            for msg in self._api_history[-20:]:
+                role = "model" if msg["role"] == "assistant" else "user"
+                if contents and contents[-1]["role"] == role:
+                    contents[-1]["parts"][0]["text"] += "\n" + msg["content"]
+                else:
+                    contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+
+            config = genai_types.GenerateContentConfig(
+                system_instruction=system,
+                max_output_tokens=2000,
+            )
+            response = await client.aio.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=contents,
+                config=config,
+            )
+            result = response.text.strip()
+            self._api_history.append({"role": "assistant", "content": result})
+            self._status = "done"
+            log.info(f"API work mode response for {self._project_name} ({len(result)} chars)")
+            return result
+
+        except Exception as e:
+            self._status = "error"
+            log.error(f"API work mode error: {e}")
             return f"Something went wrong, sir: {str(e)[:100]}"
 
     async def stop(self):
@@ -121,6 +198,7 @@ class WorkSession:
         self._project_name = None
         self._message_count = 0
         self._status = "idle"
+        self._api_history = []
         log.info(f"Work mode ended for {project}")
 
     def _save_session(self):
@@ -149,7 +227,7 @@ class WorkSession:
                 data = json.loads(SESSION_FILE.read_text())
                 self._working_dir = data["working_dir"]
                 self._project_name = data["project_name"]
-                self._message_count = data.get("message_count", 1)  # Assume at least 1 so --continue is used
+                self._message_count = data.get("message_count", 1)
                 self._active = True
                 self._status = "idle"
                 log.info(f"Restored work session: {self._project_name} ({self._working_dir})")
@@ -162,7 +240,8 @@ class WorkSession:
 def is_casual_question(text: str) -> bool:
     """Detect if a message is casual chat vs work-related.
 
-    Casual questions go to Haiku (fast). Work goes to claude -p (powerful).
+    Casual questions go straight to Gemini (fast).
+    Work questions go to the agentic session (powerful).
     """
     t = text.lower().strip()
 
@@ -182,7 +261,6 @@ def is_casual_question(text: str) -> bool:
         "any update", "status update",
     ]
 
-    # Short greetings/acknowledgments
     if len(t.split()) <= 3 and any(w in t for w in ["ok", "okay", "sure", "yes", "no", "yeah", "nah", "cool"]):
         return True
 

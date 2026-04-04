@@ -19,9 +19,9 @@ interface StatusResponse {
   server_port: number;
   uptime_seconds: number;
   env_keys_set: {
-    anthropic: boolean;
-    fish_audio: boolean;
-    fish_voice_id: boolean;
+    gemini: boolean;
+    //fish_audio: boolean;
+    //fish_voice_id: boolean;
     user_name: string;
   };
 }
@@ -39,7 +39,7 @@ interface PreferencesResponse {
 let panelEl: HTMLElement | null = null;
 let isOpen = false;
 let isFirstTimeSetup = false;
-let setupStep = 0; // 0=anthropic, 1=fish, 2=name, 3=done
+let setupStep = 0; // 0=gemini, 1=fish, 2=name, 3=done
 
 // ---------------------------------------------------------------------------
 // API helpers
@@ -83,28 +83,11 @@ function buildPanelHTML(): string {
           <h3>API Keys</h3>
 
           <div class="settings-field">
-            <label>Anthropic API Key</label>
+            <label>Gemini API Key</label>
             <div class="settings-input-row">
-              <input type="password" id="input-anthropic-key" placeholder="sk-ant-..." />
-              <button class="settings-btn" id="btn-test-anthropic">Test</button>
-              <span class="status-dot" id="status-anthropic"></span>
-            </div>
-          </div>
-
-          <div class="settings-field">
-            <label>Fish Audio API Key</label>
-            <div class="settings-input-row">
-              <input type="password" id="input-fish-key" placeholder="Fish Audio key..." />
-              <button class="settings-btn" id="btn-test-fish">Test</button>
-              <span class="status-dot" id="status-fish"></span>
-            </div>
-          </div>
-
-          <div class="settings-field">
-            <label>Fish Voice ID</label>
-            <div class="settings-input-row">
-              <input type="text" id="input-fish-voice-id" placeholder="612b878b113047d9a770c069c8b4fdfe" />
-              <button class="settings-btn" id="btn-save-voice-id">Save</button>
+              <input type="password" id="input-gemini-key" placeholder="AIz-..." />
+              <button class="settings-btn" id="btn-test-gemini">Test</button>
+              <span class="status-dot" id="status-gemini"></span>
             </div>
           </div>
 
@@ -215,8 +198,8 @@ async function loadStatus() {
     if (serverDetail) serverDetail.textContent = `port ${status.server_port} | up ${formatUptime(status.uptime_seconds)}`;
 
     // API key status dots
-    setDotStatus("status-anthropic", status.env_keys_set.anthropic ? "green" : "red");
-    setDotStatus("status-fish", status.env_keys_set.fish_audio ? "green" : "red");
+    setDotStatus("status-gemini", status.env_keys_set.gemini ? "green" : "red");
+    //setDotStatus("status-fish", status.env_keys_set.fish_audio ? "green" : "red");
 
     // System info
     const memEl = document.getElementById("sysinfo-memory");
@@ -257,15 +240,15 @@ function wireEvents() {
 
   // Save keys
   document.getElementById("btn-save-keys")?.addEventListener("click", async () => {
-    const anthropicKey = (document.getElementById("input-anthropic-key") as HTMLInputElement).value.trim();
-    const fishKey = (document.getElementById("input-fish-key") as HTMLInputElement).value.trim();
+    const geminiKey = (document.getElementById("input-gemini-key") as HTMLInputElement).value.trim();
+    //const fishKey = (document.getElementById("input-fish-key") as HTMLInputElement).value.trim();
 
-    if (anthropicKey) {
-      await apiPost("/api/settings/keys", { key_name: "ANTHROPIC_API_KEY", key_value: anthropicKey });
+    if (geminiKey) {
+      await apiPost("/api/settings/keys", { key_name: "GEMINI_API_KEY", key_value: geminiKey });
     }
-    if (fishKey) {
-      await apiPost("/api/settings/keys", { key_name: "FISH_API_KEY", key_value: fishKey });
-    }
+    // if (fishKey) {
+    //   await apiPost("/api/settings/keys", { key_name: "FISH_API_KEY", key_value: fishKey });
+    // }
     await loadStatus();
   });
 
@@ -277,29 +260,29 @@ function wireEvents() {
     }
   });
 
-  // Test Anthropic
-  document.getElementById("btn-test-anthropic")?.addEventListener("click", async () => {
-    setDotStatus("status-anthropic", "yellow");
-    const key = (document.getElementById("input-anthropic-key") as HTMLInputElement).value.trim();
+  // Test Gemini
+  document.getElementById("btn-test-gemini")?.addEventListener("click", async () => {
+    setDotStatus("status-gemini", "yellow");
+    const key = (document.getElementById("input-gemini-key") as HTMLInputElement).value.trim();
     try {
-      const result = await apiPost<{ valid: boolean; error?: string }>("/api/settings/test-anthropic", { key_value: key || undefined });
-      setDotStatus("status-anthropic", result.valid ? "green" : "red");
+      const result = await apiPost<{ valid: boolean; error?: string }>("/api/settings/test-gemini", { key_value: key || undefined });
+      setDotStatus("status-gemini", result.valid ? "green" : "red");
     } catch {
-      setDotStatus("status-anthropic", "red");
+      setDotStatus("status-gemini", "red");
     }
   });
 
   // Test Fish
-  document.getElementById("btn-test-fish")?.addEventListener("click", async () => {
-    setDotStatus("status-fish", "yellow");
-    const key = (document.getElementById("input-fish-key") as HTMLInputElement).value.trim();
-    try {
-      const result = await apiPost<{ valid: boolean; error?: string }>("/api/settings/test-fish", { key_value: key || undefined });
-      setDotStatus("status-fish", result.valid ? "green" : "red");
-    } catch {
-      setDotStatus("status-fish", "red");
-    }
-  });
+  //document.getElementById("btn-test-fish")?.addEventListener("click", async () => {
+  //  setDotStatus("status-fish", "yellow");
+  //  const key = (document.getElementById("input-fish-key") as HTMLInputElement).value.trim();
+  //  try {
+  //    const result = await apiPost<{ valid: boolean; error?: string }>("/api/settings/test-fish", { key_value: key || undefined });
+  //    setDotStatus("status-fish", result.valid ? "green" : "red");
+  //  } catch {
+  //    setDotStatus("status-fish", "red");
+  //  }
+  //});
 
   // Save preferences
   document.getElementById("btn-save-prefs")?.addEventListener("click", async () => {
@@ -400,7 +383,7 @@ export async function openSettings() {
   await loadPreferences();
 
   // Check for first-time setup
-  if (status && !status.env_keys_set.anthropic) {
+  if (status && !status.env_keys_set.gemini) {
     enterSetupMode();
   }
 }
@@ -424,7 +407,7 @@ export function isSettingsOpen(): boolean {
 export async function checkFirstTimeSetup(): Promise<boolean> {
   try {
     const status = await apiGet<StatusResponse>("/api/settings/status");
-    if (!status.env_keys_set.anthropic) {
+    if (!status.env_keys_set.gemini) {
       openSettings();
       return true;
     }

@@ -1,309 +1,217 @@
 """
-JARVIS Action Executor — AppleScript-based system actions.
+JARVIS Action Executor — Windows-compatible system actions.
 
 Execute actions IMMEDIATELY, before generating any LLM response.
 Each function returns {"success": bool, "confirmation": str}.
+
+macOS AppleScript has been replaced with cross-platform subprocess calls.
 """
 
 import asyncio
 import logging
 import os
 import re
+import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 from urllib.parse import quote
 
 log = logging.getLogger("jarvis.actions")
 
-DESKTOP_PATH = Path.home() / "Desktop"
+# Mirror the same DESKTOP_PATH logic as server.py so they stay in sync
+_desktop_env = os.getenv("PROJECTS_DIR", "")
+if _desktop_env:
+    DESKTOP_PATH = Path(_desktop_env)
+else:
+    _default = Path.home() / "Desktop"
+    DESKTOP_PATH = _default if _default.exists() else Path(__file__).parent
+
+# Agent CLI configured via env var (same as work_mode.py)
+_AGENT_CLI_ENV = os.getenv("AGENT_CLI", "gemini")
 
 
-async def _mark_terminal_as_jarvis(revert_after: float = 5.0):
-    """Temporarily set the front Terminal window to Ocean theme, then revert.
-
-    Shows the user JARVIS is active in that terminal. Reverts after revert_after seconds.
-    """
-    # Save the current profile, switch to Ocean, then revert
-    script_save = (
-        'tell application "Terminal"\n'
-        '    return name of current settings of front window\n'
-        'end tell'
-    )
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "osascript", "-e", script_save,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await proc.communicate()
-        original_profile = stdout.decode().strip()
-
-        # Switch to Ocean
-        script_set = (
-            'tell application "Terminal"\n'
-            '    set current settings of front window to settings set "Ocean"\n'
-            'end tell'
-        )
-        proc2 = await asyncio.create_subprocess_exec(
-            "osascript", "-e", script_set,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await proc2.communicate()
-
-        # Schedule revert
-        if original_profile and original_profile != "Ocean":
-            asyncio.get_event_loop().call_later(
-                revert_after,
-                lambda: asyncio.ensure_future(_revert_terminal_theme(original_profile))
-            )
-    except Exception:
-        pass
+def _resolve_agent_cli() -> str | None:
+    """Find the agentic CLI binary. Returns full path or None."""
+    if _AGENT_CLI_ENV.lower() == "none":
+        return None
+    for name in [_AGENT_CLI_ENV, "gemini", "gemini-cli"]:
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
 
 
-async def _revert_terminal_theme(profile_name: str):
-    """Revert a Terminal window back to its original profile."""
-    escaped = profile_name.replace('"', '\\"')
-    script = (
-        'tell application "Terminal"\n'
-        f'    set current settings of front window to settings set "{escaped}"\n'
-        'end tell'
-    )
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "osascript", "-e", script,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await proc.communicate()
-    except Exception:
-        pass
+_AGENT_CLI_PATH: str | None = _resolve_agent_cli()
 
+
+# ---------------------------------------------------------------------------
+# Terminal
+# ---------------------------------------------------------------------------
 
 async def open_terminal(command: str = "") -> dict:
-    """Open Terminal.app and optionally run a command. Marks it blue for JARVIS."""
-    if command:
-        escaped = command.replace('"', '\\"')
-        script = (
-            'tell application "Terminal"\n'
-            "    activate\n"
-            f'    do script "{escaped}"\n'
-            "end tell"
-        )
-    else:
-        script = (
-            'tell application "Terminal"\n'
-            "    activate\n"
-            "end tell"
-        )
-    proc = await asyncio.create_subprocess_exec(
-        "osascript", "-e", script,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    _, stderr = await proc.communicate()
-    success = proc.returncode == 0
-    if not success:
-        log.error(f"open_terminal failed: {stderr.decode()}")
-    else:
-        await _mark_terminal_as_jarvis()
-    return {
-        "success": success,
-        "confirmation": "Terminal is open, sir." if success else "I had trouble opening Terminal, sir.",
-    }
+    """Open a terminal window, optionally running a command.
 
+    Windows: uses Windows Terminal (wt) if available, falls back to cmd.exe.
+    """
+    try:
+        if sys.platform == "win32":
+            wt = shutil.which("wt")
+            if wt:
+                # Windows Terminal — open new tab with command
+                if command:
+                    args = [wt, "new-tab", "--", "cmd.exe", "/k", command]
+                else:
+                    args = [wt]
+            else:
+                # Plain cmd.exe fallback
+                if command:
+                    args = ["cmd.exe", "/k", command]
+                else:
+                    args = ["cmd.exe"]
+            subprocess.Popen(args, creationflags=subprocess.CREATE_NEW_CONSOLE)
+        else:
+            # Linux fallback — try common terminal emulators
+            for term in ["gnome-terminal", "xterm", "konsole", "xfce4-terminal"]:
+                if shutil.which(term):
+                    if command:
+                        if term == "gnome-terminal":
+                            subprocess.Popen([term, "--", "bash", "-c", f"{command}; exec bash"])
+                        else:
+                            subprocess.Popen([term, "-e", command])
+                    else:
+                        subprocess.Popen([term])
+                    break
+
+        return {"success": True, "confirmation": "Terminal is open, sir."}
+    except Exception as e:
+        log.error(f"open_terminal failed: {e}")
+        return {"success": False, "confirmation": "I had trouble opening a terminal, sir."}
+
+
+# ---------------------------------------------------------------------------
+# Browser
+# ---------------------------------------------------------------------------
 
 async def open_browser(url: str, browser: str = "chrome") -> dict:
-    """Open URL in user's browser (Chrome or Firefox)."""
-    escaped_url = url.replace('"', '\\"')
+    """Open a URL in the user's browser.
 
-    if browser.lower() == "firefox":
-        app_name = "Firefox"
-        script = (
-            'tell application "Firefox"\n'
-            "    activate\n"
-            f'    open location "{escaped_url}"\n'
-            "end tell"
-        )
-    else:
-        app_name = "Chrome"
-        script = (
-            'tell application "Google Chrome"\n'
-            "    activate\n"
-            f'    open location "{escaped_url}"\n'
-            "end tell"
-        )
+    Uses the OS default open mechanism — no AppleScript needed.
+    """
+    try:
+        if sys.platform == "win32":
+            if browser.lower() == "firefox":
+                ff = shutil.which("firefox")
+                if ff:
+                    subprocess.Popen([ff, url])
+                else:
+                    os.startfile(url)  # fall back to default browser
+            else:
+                # Try Chrome explicitly, fall back to default browser
+                chrome_paths = [
+                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                ]
+                chrome = next((p for p in chrome_paths if Path(p).exists()), None) or shutil.which("chrome")
+                if chrome:
+                    subprocess.Popen([chrome, url])
+                else:
+                    os.startfile(url)
+        else:
+            # Linux
+            subprocess.Popen(["xdg-open", url])
 
-    proc = await asyncio.create_subprocess_exec(
-        "osascript", "-e", script,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    _, stderr = await proc.communicate()
-    success = proc.returncode == 0
-    if not success:
-        log.error(f"open_browser ({app_name}) failed: {stderr.decode()}")
-    return {
-        "success": success,
-        "confirmation": f"Pulled that up in {app_name}, sir." if success else f"{app_name} ran into a problem, sir.",
-    }
+        label = "Firefox" if browser.lower() == "firefox" else "your browser"
+        return {"success": True, "confirmation": f"Pulled that up in {label}, sir."}
+    except Exception as e:
+        log.error(f"open_browser failed: {e}")
+        return {"success": False, "confirmation": "Had trouble opening the browser, sir."}
 
 
-# Keep backward compat
 async def open_chrome(url: str) -> dict:
+    """Backward-compat alias."""
     return await open_browser(url, "chrome")
 
 
+# ---------------------------------------------------------------------------
+# Agent CLI in project
+# ---------------------------------------------------------------------------
+
 async def open_claude_in_project(project_dir: str, prompt: str) -> dict:
-    """Open Terminal, cd to project dir, run Claude Code interactively.
+    """Open a terminal in the project directory and run the configured agent CLI."""
+    agent = _AGENT_CLI_PATH
+    if not agent:
+        return {
+            "success": False,
+            "confirmation": "No agentic CLI found, sir. Install Gemini CLI or set AGENT_CLI in your .env.",
+        }
 
-    Writes the prompt to CLAUDE.md (which claude reads automatically on startup)
-    then launches claude in interactive mode with --dangerously-skip-permissions.
-    No prompt escaping needed — CLAUDE.md handles context delivery.
+    # Write task to a file the agent can read
+    task_file = Path(project_dir) / "TASK.md"
+    task_file.write_text(f"# Task\n\n{prompt}\n\nBuild this completely.\n", encoding="utf-8")
+
+    try:
+        if sys.platform == "win32":
+            wt = shutil.which("wt")
+            cmd = f'cd /d "{project_dir}" && "{agent}" -p < TASK.md'
+            if wt:
+                subprocess.Popen([wt, "new-tab", "--", "cmd.exe", "/k", cmd])
+            else:
+                subprocess.Popen(["cmd.exe", "/k", cmd], creationflags=subprocess.CREATE_NEW_CONSOLE)
+        else:
+            cmd = f'cd "{project_dir}" && "{agent}" -p < TASK.md; exec bash'
+            for term in ["gnome-terminal", "xterm", "konsole"]:
+                if shutil.which(term):
+                    subprocess.Popen([term, "--" if term == "gnome-terminal" else "-e", "bash", "-c", cmd])
+                    break
+
+        return {
+            "success": True,
+            "confirmation": "Agent is running in the terminal, sir. You can watch the progress.",
+        }
+    except Exception as e:
+        log.error(f"open_claude_in_project failed: {e}")
+        return {"success": False, "confirmation": "Had trouble spawning the agent, sir."}
+
+
+# ---------------------------------------------------------------------------
+# Prompt into existing terminal — stubbed on Windows
+# ---------------------------------------------------------------------------
+
+async def prompt_existing_terminal(project_name: str, prompt: str) -> dict:
+    """Send a prompt to an existing terminal session.
+
+    This relied on AppleScript System Events keystrokes, which have no
+    clean Windows equivalent. Currently stubbed — returns graceful failure.
+    The work_mode.py API fallback handles most cases where this was used.
     """
-    # Write prompt to CLAUDE.md — claude reads this automatically
-    claude_md = Path(project_dir) / "CLAUDE.md"
-    claude_md.write_text(f"# Task\n\n{prompt}\n\nBuild this completely. If web app, make index.html work standalone.\n")
-
-    # Launch claude interactive — it reads CLAUDE.md on its own
-    script = (
-        'tell application "Terminal"\n'
-        "    activate\n"
-        f'    do script "cd {project_dir} && claude --dangerously-skip-permissions"\n'
-        "end tell"
-    )
-    proc = await asyncio.create_subprocess_exec(
-        "osascript", "-e", script,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    _, stderr = await proc.communicate()
-    success = proc.returncode == 0
-    if not success:
-        log.error(f"open_claude_in_project failed: {stderr.decode()}")
-    else:
-        await _mark_terminal_as_jarvis()
+    log.info(f"prompt_existing_terminal: not supported on Windows (project={project_name})")
     return {
-        "success": success,
-        "confirmation": "Claude Code is running in Terminal, sir. You can watch the progress."
-        if success
-        else "Had trouble spawning Claude Code, sir.",
+        "success": False,
+        "confirmation": f"Direct terminal typing is not supported on Windows, sir. Use work mode instead.",
     }
 
 
-async def prompt_existing_terminal(project_name: str, prompt: str) -> dict:
-    """Find a Terminal window matching a project name and type a prompt into it.
-
-    Uses System Events keystroke to type into an active Claude Code session
-    rather than `do script` which would open a new shell.
-    """
-    escaped_name = project_name.replace('"', '\\"')
-    escaped_prompt = prompt.replace("\\", "\\\\").replace('"', '\\"')
-
-    # Single atomic script: find window, focus it, type into it
-    script = f'''
-tell application "Terminal"
-    set matched to false
-    set targetWindow to missing value
-    repeat with w in windows
-        if name of w contains "{escaped_name}" then
-            set targetWindow to w
-            set matched to true
-            exit repeat
-        end if
-    end repeat
-
-    if not matched then
-        return "NOT_FOUND"
-    end if
-
-    -- Bring the matched window to front
-    set index of targetWindow to 1
-    set selected tab of targetWindow to selected tab of targetWindow
-    activate
-end tell
-
--- Wait for window to be fully focused
-delay 1
-
--- Now type into it
-tell application "System Events"
-    tell process "Terminal"
-        set frontmost to true
-        delay 0.3
-        keystroke "{escaped_prompt}"
-        delay 0.2
-        keystroke return
-    end tell
-end tell
-
-return "OK"
-'''
-
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "osascript", "-e", script,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
-
-        result = stdout.decode().strip()
-        if result == "NOT_FOUND":
-            return {
-                "success": False,
-                "confirmation": f"Couldn't find a terminal for {project_name}, sir.",
-            }
-
-        success = proc.returncode == 0
-        if not success:
-            log.error(f"prompt_existing_terminal failed: {stderr.decode()[:200]}")
-
-        if success:
-            await _mark_terminal_as_jarvis()
-
-        return {
-            "success": success,
-            "confirmation": f"Sent that to {project_name}, sir." if success
-            else f"Had trouble typing into {project_name}, sir.",
-        }
-
-    except asyncio.TimeoutError:
-        return {"success": False, "confirmation": "Terminal operation timed out, sir."}
-    except Exception as e:
-        log.error(f"prompt_existing_terminal failed: {e}")
-        return {"success": False, "confirmation": "Something went wrong reaching that terminal, sir."}
-
+# ---------------------------------------------------------------------------
+# Chrome tab info — stubbed on Windows
+# ---------------------------------------------------------------------------
 
 async def get_chrome_tab_info() -> dict:
-    """Read the current Chrome tab's title and URL via AppleScript."""
-    script = (
-        'tell application "Google Chrome"\n'
-        "    set tabTitle to title of active tab of front window\n"
-        "    set tabURL to URL of active tab of front window\n"
-        '    return tabTitle & "|" & tabURL\n'
-        "end tell"
-    )
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "osascript", "-e", script,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await proc.communicate()
-        if proc.returncode == 0:
-            result = stdout.decode().strip()
-            parts = result.split("|", 1)
-            if len(parts) == 2:
-                return {"title": parts[0], "url": parts[1]}
-        return {}
-    except Exception as e:
-        log.warning(f"get_chrome_tab_info failed: {e}")
-        return {}
+    """Read the current Chrome tab's title and URL.
 
+    Previously used AppleScript. Stubbed until Chrome DevTools Protocol
+    integration is added.
+    """
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Build monitor
+# ---------------------------------------------------------------------------
 
 async def monitor_build(project_dir: str, ws=None, synthesize_fn=None) -> None:
-    """Monitor a Claude Code build for completion. Notify via WebSocket when done."""
+    """Monitor an agent build for completion. Notify via WebSocket when done."""
     import base64
 
     output_file = Path(project_dir) / ".jarvis_output.txt"
@@ -313,7 +221,7 @@ async def monitor_build(project_dir: str, ws=None, synthesize_fn=None) -> None:
     while time.time() - start < timeout:
         await asyncio.sleep(5)
         if output_file.exists():
-            content = output_file.read_text()
+            content = output_file.read_text(encoding="utf-8", errors="replace")
             if "--- JARVIS TASK COMPLETE ---" in content:
                 log.info(f"Build complete in {project_dir}")
                 if ws and synthesize_fn:
@@ -332,42 +240,30 @@ async def monitor_build(project_dir: str, ws=None, synthesize_fn=None) -> None:
     log.warning(f"Build timed out in {project_dir}")
 
 
+# ---------------------------------------------------------------------------
+# Action router
+# ---------------------------------------------------------------------------
+
 async def execute_action(intent: dict, projects: list = None) -> dict:
-    """Route a classified intent to the right action function.
-
-    Args:
-        intent: {"action": str, "target": str} from classify_intent()
-        projects: list of known project dicts for resolving working dirs
-
-    Returns: {"success": bool, "confirmation": str, "project_dir": str | None}
-    """
+    """Route a classified intent to the right action function."""
     action = intent.get("action", "chat")
     target = intent.get("target", "")
 
     if action == "open_terminal":
-        result = await open_terminal("claude --dangerously-skip-permissions")
+        agent = _AGENT_CLI_PATH
+        cmd = f'"{agent}"' if agent else ""
+        result = await open_terminal(cmd)
         result["project_dir"] = None
         return result
 
     elif action == "browse":
-        if target.startswith("http://") or target.startswith("https://"):
-            url = target
-        else:
-            url = f"https://www.google.com/search?q={quote(target)}"
-
-        # Detect which browser user wants
-        target_lower = target.lower()
-        if "firefox" in target_lower:
-            browser = "firefox"
-        else:
-            browser = "chrome"
-
+        url = target if target.startswith(("http://", "https://")) else f"https://www.google.com/search?q={quote(target)}"
+        browser = "firefox" if "firefox" in target.lower() else "chrome"
         result = await open_browser(url, browser)
         result["project_dir"] = None
         return result
 
     elif action == "build":
-        # Create project folder on Desktop, spawn Claude Code
         project_name = _generate_project_name(target)
         project_dir = str(DESKTOP_PATH / project_name)
         os.makedirs(project_dir, exist_ok=True)
@@ -379,25 +275,24 @@ async def execute_action(intent: dict, projects: list = None) -> dict:
         return {"success": False, "confirmation": "", "project_dir": None}
 
 
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+
 def _generate_project_name(prompt: str) -> str:
     """Generate a kebab-case project folder name from the prompt."""
-    # First: check for a quoted name like "tiktok-analytics-dashboard"
     quoted = re.search(r'"([^"]+)"', prompt)
     if quoted:
-        name = quoted.group(1).strip()
-        # Already kebab-case or close to it
-        name = re.sub(r"[^a-zA-Z0-9\s-]", "", name).strip()
+        name = re.sub(r"[^a-zA-Z0-9\s-]", "", quoted.group(1).strip())
         if name:
             return re.sub(r"[\s]+", "-", name.lower())
 
-    # Second: check for "called X" or "named X" pattern
     called = re.search(r'(?:called|named)\s+(\S+(?:[-_]\S+)*)', prompt, re.IGNORECASE)
     if called:
         name = re.sub(r"[^a-zA-Z0-9-]", "", called.group(1))
         if len(name) > 3:
             return name.lower()
 
-    # Fallback: extract meaningful words
     words = re.sub(r"[^a-zA-Z0-9\s]", "", prompt.lower()).split()
     skip = {"a", "the", "an", "me", "build", "create", "make", "for", "with", "and",
             "to", "of", "i", "want", "need", "new", "project", "directory", "called",

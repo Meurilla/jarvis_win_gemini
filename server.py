@@ -32,7 +32,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import anthropic
+from google import genai
+from google.genai import types as genai_types
+import edge_tts
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -60,14 +62,20 @@ log = logging.getLogger("jarvis")
 # Config
 # ---------------------------------------------------------------------------
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-FISH_API_KEY = os.getenv("FISH_API_KEY", "")
-FISH_VOICE_ID = os.getenv("FISH_VOICE_ID", "612b878b113047d9a770c069c8b4fdfe")  # JARVIS (MCU)
-FISH_API_URL = "https://api.fish.audio/v1/tts"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "en-GB-RyanNeural")  # British male — closest to MCU JARVIS
 USER_NAME = os.getenv("USER_NAME", "sir")
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-DESKTOP_PATH = Path.home() / "Desktop"
+# Projects root — configurable via env var.
+# Defaults to ~/Desktop but falls back to the project directory itself
+# if Desktop doesn't exist (common on Windows with non-standard usernames).
+_desktop_env = os.getenv("PROJECTS_DIR", "")
+if _desktop_env:
+    DESKTOP_PATH = Path(_desktop_env)
+else:
+    _default = Path.home() / "Desktop"
+    DESKTOP_PATH = _default if _default.exists() else Path(PROJECT_DIR)
 
 JARVIS_SYSTEM_PROMPT = """\
 You are JARVIS — Just A Rather Very Intelligent System. You serve as {user_name}'s AI assistant, modeled precisely after Tony Stark's AI from the MCU films.
@@ -95,7 +103,7 @@ CONVERSATION STYLE:
 - When you don't know something: "I'm afraid I don't have that information, sir" not "I don't know"
 
 SELF-AWARENESS:
-You ARE the JARVIS project at {project_dir} on {user_name}'s computer. Your code is Python (FastAPI server, WebSocket voice, Fish Audio TTS, Anthropic API). You were built by {user_name}. If asked about yourself, your code, how you work, or your line count — use [ACTION:PROMPT_PROJECT] to check the jarvis project. You have full access to your own source code.
+You ARE the JARVIS project at {project_dir} on {user_name}'s computer. Your code is Python (FastAPI server, WebSocket voice, edge-tts for speech, Gemini API for intelligence). You were built by {user_name}. If asked about yourself, your code, how you work, or your line count — use [ACTION:PROMPT_PROJECT] to check the jarvis project. You have full access to your own source code.
 
 YOUR CAPABILITIES (these are REAL and ACTIVE — you CAN do all of these RIGHT NOW):
 - You CAN open Terminal.app via AppleScript
@@ -138,7 +146,7 @@ If the user asks you to do something you genuinely can't do, say "I'm afraid tha
 YOUR INTERFACE:
 The user interacts with you through a web browser showing a particle orb visualization that reacts to your voice. The interface has these controls:
 - **Three-dot menu** (top right): contains Settings, Restart Server, and Fix Yourself options
-- **Settings panel**: Opens from the menu. Users can enter API keys (Anthropic, Fish Audio), test connections, set their name and preferences, and see system status (calendar, mail, notes connectivity). Keys are saved to the .env file.
+- **Settings panel**: Opens from the menu. Users can enter API keys (Gemini), test connections, set their name and preferences, and see system status (calendar, mail, notes connectivity). Keys are saved to the .env file.
 - **Mute button**: Toggles your listening on/off. When muted, you can't hear the user. They click it again to unmute.
 - **Restart Server**: Restarts your backend process. Useful if something seems stuck.
 - **Fix Yourself**: Opens Claude Code in your own project directory so you can debug and fix issues in your own code.
@@ -188,6 +196,7 @@ When you decide the user needs something DONE (not just discussed), include an a
 - [ACTION:RESEARCH] detailed research brief — when user wants real research with real data. Claude Code will browse the web, find real listings/data, and create a report document. Give it a detailed brief of what to find.
 - [ACTION:OPEN_TERMINAL] — when user just wants a fresh Claude Code terminal with no specific project
 CRITICAL: When the user asks about their SCREEN, what's RUNNING, or what they're LOOKING AT — ALWAYS use [ACTION:SCREEN] or let the fast action system handle it. NEVER use [ACTION:PROMPT_PROJECT] for screen requests. PROMPT_PROJECT is ONLY for working on code projects.
+CRITICAL: Do NOT use ANY action tag for requests about JARVIS itself — "close yourself", "shut down", "exit", "stop", "restart". Respond conversationally. You cannot terminate your own process; suggest the Restart Server option in the menu if relevant.
 
 - [ACTION:PROMPT_PROJECT] project_name ||| prompt — THIS IS YOUR MOST POWERFUL ACTION. Use it whenever the user wants to work on, jump into, resume, check on, or interact with ANY existing project. You connect directly to Claude Code in that project and can read its response. Craft a clear prompt based on what the user wants. Examples:
   "jump into client engine" → [ACTION:PROMPT_PROJECT] The Client Engine ||| What is the current state of this project? Summarize what was being worked on most recently.
@@ -383,7 +392,7 @@ class ClaudeTaskManager:
         if work_dir == "." or not work_dir:
             # Create a new project folder on Desktop
             project_name = self._generate_project_name(task.prompt)
-            work_dir = str(Path.home() / "Desktop" / project_name)
+            work_dir = str(DESKTOP_PATH / project_name)
             os.makedirs(work_dir, exist_ok=True)
             task.working_dir = work_dir
 
@@ -633,37 +642,119 @@ def apply_speech_corrections(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# LLM Intent Classifier (replaces keyword-based action detection)
+# Gemini helpers
 # ---------------------------------------------------------------------------
 
-async def classify_intent(text: str, client: anthropic.AsyncAnthropic) -> dict:
-    """Classify every user message using Haiku LLM.
+# Module-level client — created once in lifespan, reused for all calls.
+_gemini_client: "genai.Client | None" = None
+
+
+def _to_gemini_contents(messages: list[dict]) -> list[dict]:
+    """Convert Anthropic-style messages to google.genai content format.
+
+    Anthropic: {"role": "user"|"assistant", "content": "text"}
+    google.genai: {"role": "user"|"model", "parts": [{"text": "text"}]}
+
+    Gemini requires strictly alternating user/model turns, so consecutive
+    messages from the same role are merged into one.
+    """
+    converted = []
+    for msg in messages:
+        role = "model" if msg.get("role") == "assistant" else "user"
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            text = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
+        else:
+            text = str(content)
+
+        if converted and converted[-1]["role"] == role:
+            converted[-1]["parts"][0]["text"] += "\n" + text
+        else:
+            converted.append({"role": role, "parts": [{"text": text}]})
+
+    return converted
+
+
+async def _call_gemini(
+    system: str,
+    messages: list[dict],
+    model_name: str = "gemini-3-flash-preview",
+    max_tokens: int = 500,
+    thinking_budget: int = 0,
+) -> tuple[str, int, int]:
+    """Call the Gemini API. Returns (text, input_tokens, output_tokens).
+
+    model_name options:
+      "gemini-3-flash-preview-preview"  — high-frequency calls (voice, intent, summaries): 10k RPD
+      "gemini-2.5-pro"          — low-frequency calls (deep research, planning): 1k RPD
+
+    thinking_budget:
+      0   — thinking disabled (default). Use for voice loop — fastest, no token waste.
+     -1   — dynamic thinking (model decides). Use for research/planning calls.
+    """
+    client = _gemini_client
+    if client is None:
+        if not GEMINI_API_KEY:
+            return "Gemini API key not configured.", 0, 0
+        client = genai.Client(api_key=GEMINI_API_KEY)
+
+    try:
+        contents = _to_gemini_contents(messages)
+
+        config_kwargs = dict(
+            system_instruction=system,
+            max_output_tokens=max_tokens,
+        )
+        # Only pass thinking_config when the model supports it
+        # (flash-preview and pro support it; older models may not)
+        try:
+            config_kwargs["thinking_config"] = genai_types.ThinkingConfig(
+                thinking_budget=thinking_budget,
+            )
+        except AttributeError:
+            pass  # SDK version doesn't expose ThinkingConfig — fine, skip it
+
+        config = genai_types.GenerateContentConfig(**config_kwargs)
+        response = await client.aio.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=config,
+        )
+        text = response.text
+        inp = getattr(response.usage_metadata, "prompt_token_count", 0) or 0
+        out = getattr(response.usage_metadata, "candidates_token_count", 0) or 0
+        return text, inp, out
+    except Exception as e:
+        log.error(f"Gemini API error: {e}")
+        return f"Apologies, sir. Language systems are unavailable: {e}", 0, 0
+
+
+async def classify_intent(text: str) -> dict:
+    """Classify every user message using Gemini Flash.
 
     Returns: {"action": "open_terminal|browse|build|chat", "target": "description"}
     """
+    system = (
+        "Classify this voice command. The user is talking to JARVIS, an AI assistant that can:\n"
+        "- Open Terminal and run an agentic coding tool\n"
+        "- Open Chrome browser for web searches and URLs\n"
+        "- Build software projects via an agentic coding tool in Terminal\n"
+        "- Research topics by opening Chrome search\n\n"
+        "Return ONLY valid JSON: {\"action\": \"open_terminal|browse|build|chat\", "
+        "\"target\": \"description of what to do\"}\n"
+        "open_terminal = user wants to open terminal or launch a coding agent\n"
+        "browse = user wants to search the web, look something up, visit a URL\n"
+        "build = user wants to create/build a software project\n"
+        "chat = just conversation, questions, or anything else\n"
+        "If unclear, default to \"chat\"."
+    )
     try:
-        response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=100,
-            system=(
-                "Classify this voice command. The user is talking to JARVIS, an AI assistant that can:\n"
-                "- Open Terminal and run Claude Code (coding AI tool)\n"
-                "- Open Chrome browser for web searches and URLs\n"
-                "- Build software projects via Claude Code in Terminal\n"
-                "- Research topics by opening Chrome search\n\n"
-                "Note: speech-to-text may produce errors like \"Cloud\" for \"Claude\", "
-                "\"Travis\" for \"JARVIS\", \"clock code\" for \"Claude Code\".\n\n"
-                "Return ONLY valid JSON: {\"action\": \"open_terminal|browse|build|chat\", "
-                "\"target\": \"description of what to do\"}\n"
-                "open_terminal = user wants to open terminal or launch Claude Code\n"
-                "browse = user wants to search the web, look something up, visit a URL\n"
-                "build = user wants to create/build a software project\n"
-                "chat = just conversation, questions, or anything else\n"
-                "If unclear, default to \"chat\"."
-            ),
+        raw, _, _ = await _call_gemini(
+            system=system,
             messages=[{"role": "user", "content": text}],
+            model_name="gemini-3-flash-preview",
+            max_tokens=400,
         )
-        raw = response.content[0].text.strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
         data = json.loads(raw)
@@ -773,7 +864,7 @@ async def _execute_research(target: str, ws=None):
     """Execute research via claude -p in background. Opens report and speaks when done."""
     try:
         name = _generate_project_name(target)
-        path = str(Path.home() / "Desktop" / name)
+        path = str(DESKTOP_PATH / name)
         os.makedirs(path, exist_ok=True)
 
         prompt = (
@@ -876,14 +967,17 @@ async def _execute_open_terminal():
 
 
 def _find_project_dir(project_name: str) -> str | None:
-    """Find a project directory by name from cached projects or Desktop."""
+    """Find a project directory by name from cached projects or DESKTOP_PATH."""
     for p in cached_projects:
         if project_name.lower() in p.get("name", "").lower():
             return p.get("path")
-    desktop = Path.home() / "Desktop"
-    for d in desktop.iterdir():
-        if d.is_dir() and project_name.lower() in d.name.lower():
-            return str(d)
+    if DESKTOP_PATH.exists():
+        try:
+            for d in DESKTOP_PATH.iterdir():
+                if d.is_dir() and project_name.lower() in d.name.lower():
+                    return str(d)
+        except Exception:
+            pass
     return None
 
 
@@ -944,25 +1038,26 @@ async def _execute_prompt_project(project_name: str, prompt: str, work_session: 
             dispatch_registry.update_status(dispatch_id, "failed" if full_response else "timeout", response=full_response or "")
             msg = f"Sir, I ran into an issue with {project_name}. {full_response[:150] if full_response else 'No response received.'}"
         else:
-            # Summarize via Haiku — don't read word for word
-            if anthropic_client:
+            # Summarize via Gemini Flash — don't read word for word
+            if gemini_enabled:
                 try:
-                    summary = await anthropic_client.messages.create(
-                        model="claude-haiku-4-5-20251001",
-                        max_tokens=150,
-                        system=(
-                            "You are JARVIS reporting back on what you found or built in a project. "
-                            "Speak in first person — 'I found', 'I built', 'I reviewed'. "
-                            "Start with 'Sir, ' to get the user's attention. "
-                            "Be specific but concise — highlight the key findings or actions taken. "
-                            "If there are multiple items, give the count and top 2-3 briefly. "
-                            "End by asking how the user wants to proceed. "
-                            "NEVER read out URLs or localhost addresses. NEVER say 'Claude Code'. "
-                            "2-3 sentences max. No markdown. Natural spoken voice."
-                        ),
-                        messages=[{"role": "user", "content": f"Project: {project_name}\nClaude Code reported:\n{full_response[:3000]}"}],
+                    system = (
+                        "You are JARVIS reporting back on what you found or built in a project. "
+                        "Speak in first person — 'I found', 'I built', 'I reviewed'. "
+                        "Start with 'Sir, ' to get the user's attention. "
+                        "Be specific but concise — highlight the key findings or actions taken. "
+                        "If there are multiple items, give the count and top 2-3 briefly. "
+                        "End by asking how the user wants to proceed. "
+                        "NEVER read out URLs or localhost addresses. "
+                        "2-3 sentences max. No markdown. Natural spoken voice."
                     )
-                    msg = summary.content[0].text
+                    msg, inp, out = await _call_gemini(
+                        system=system,
+                        messages=[{"role": "user", "content": f"Project: {project_name}\nAgent reported:\n{full_response[:3000]}"}],
+                        model_name="gemini-3-flash-preview",
+                        max_tokens=500,
+                    )
+                    _track_usage(inp, out)
                 except Exception:
                     msg = f"Sir, {project_name} finished. Here's the gist: {full_response[:200]}"
             else:
@@ -1007,21 +1102,21 @@ async def _execute_prompt_project(project_name: str, prompt: str, work_session: 
 
 
 async def self_work_and_notify(session: WorkSession, prompt: str, ws):
-    """Run claude -p in background and notify via voice when done."""
+    """Run agent in background and notify via voice when done."""
     try:
         full_response = await session.send(prompt)
         log.info(f"Background work complete ({len(full_response)} chars)")
 
         # Summarize and speak
-        if anthropic_client and full_response:
+        if gemini_enabled and full_response:
             try:
-                summary = await anthropic_client.messages.create(
-                    model="claude-haiku-4-5-20251001",
-                    max_tokens=100,
-                    system="You are JARVIS. Summarize what you just completed in 1 sentence. First person — 'I built', 'I set up'. No markdown. Never say 'Claude Code'.",
-                    messages=[{"role": "user", "content": f"Claude Code completed:\n{full_response[:2000]}"}],
+                msg, inp, out = await _call_gemini(
+                    system="You are JARVIS. Summarize what you just completed in 1 sentence. First person — 'I built', 'I set up'. No markdown.",
+                    messages=[{"role": "user", "content": f"Agent completed:\n{full_response[:2000]}"}],
+                    model_name="gemini-3-flash-preview",
+                    max_tokens=400,
                 )
-                msg = summary.content[0].text
+                _track_usage(inp, out)
             except Exception:
                 msg = "Work is complete, sir."
 
@@ -1043,36 +1138,45 @@ _last_greeting_time: float = 0
 
 
 # ---------------------------------------------------------------------------
-# TTS (Fish Audio)
+# TTS (edge-tts — free, no API key, Microsoft neural voices)
 # ---------------------------------------------------------------------------
 
 async def synthesize_speech(text: str) -> Optional[bytes]:
-    """Generate speech audio from text using Fish Audio TTS."""
-    if not FISH_API_KEY:
-        log.warning("FISH_API_KEY not set, skipping TTS")
+    """Generate speech audio from text using edge-tts.
+
+    Completely free, no API key required. Uses Microsoft Edge's neural TTS.
+    Voice: en-GB-RyanNeural — British male, closest to MCU JARVIS.
+    Other good options: en-GB-ThomasNeural, en-GB-OliverNeural
+    Output is MP3 bytes, same as before — no frontend changes needed.
+    """
+    if not text or not text.strip():
         return None
 
+    # Sanitize for edge_tts — certain Unicode characters break its SSML
+    # generation and cause the audio stream to terminate early.
+    clean = text.strip()
+    # Curly/smart apostrophes → straight apostrophe
+    clean = clean.replace("\u2019", "'").replace("\u2018", "'")
+    # Curly quotes → straight quotes
+    clean = clean.replace("\u201c", '"').replace("\u201d", '"')
+    # Em dash → comma-space (reads naturally in speech)
+    clean = clean.replace("\u2014", ", ")
+    # En dash → hyphen
+    clean = clean.replace("\u2013", "-")
+    # Ellipsis character → three dots
+    clean = clean.replace("\u2026", "...")
+
     try:
-        async with httpx.AsyncClient(timeout=15.0) as http:
-            response = await http.post(
-                FISH_API_URL,
-                headers={
-                    "Authorization": f"Bearer {FISH_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "text": text,
-                    "reference_id": FISH_VOICE_ID,
-                    "format": "mp3",
-                },
-            )
-            if response.status_code == 200:
-                _session_tokens["tts_calls"] += 1
-                _append_usage_entry(0, 0, "tts")
-                return response.content
-            else:
-                log.error(f"TTS error: {response.status_code}")
-                return None
+        communicate = edge_tts.Communicate(clean, EDGE_TTS_VOICE)
+        audio_chunks: list[bytes] = []
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_chunks.append(chunk["data"])
+        if audio_chunks:
+            _session_tokens["tts_calls"] += 1
+            _append_usage_entry(0, 0, "tts")
+            return b"".join(audio_chunks)
+        return None
     except Exception as e:
         log.error(f"TTS error: {e}")
         return None
@@ -1084,14 +1188,13 @@ async def synthesize_speech(text: str) -> Optional[bytes]:
 
 async def generate_response(
     text: str,
-    client: anthropic.AsyncAnthropic,
     task_mgr: ClaudeTaskManager,
     projects: list[dict],
     conversation_history: list[dict],
     last_response: str = "",
     session_summary: str = "",
 ) -> str:
-    """Generate a JARVIS response using Anthropic API."""
+    """Generate a JARVIS response using Gemini Flash."""
     now = datetime.now()
     current_time = now.strftime("%A, %B %d, %Y at %I:%M %p")
 
@@ -1135,24 +1238,18 @@ async def generate_response(
         system += f'\n\nYOUR LAST RESPONSE (do not repeat this):\n"{last_response[:150]}"'
 
     # Use conversation history — keep the last 20 messages for context
-    # (older conversation is captured in session_summary)
     messages = conversation_history[-20:]
-    # If the last message isn't the current user text, add it
     if not messages or messages[-1].get("content") != text:
         messages = messages + [{"role": "user", "content": text}]
 
-    try:
-        response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=250,  # Extra room for [ACTION:X] tags
-            system=system,
-            messages=messages,
-        )
-        track_usage(response)
-        return response.content[0].text
-    except Exception as e:
-        log.error(f"LLM error: {e}")
-        return "Apologies, sir. I'm having trouble connecting to my language systems."
+    response_text, inp, out = await _call_gemini(
+        system=system,
+        messages=messages,
+        model_name="gemini-3-flash-preview",
+        max_tokens=500,  # thinking_budget=0 (default) — no thinking overhead on voice calls
+    )
+    _track_usage(inp, out)
+    return response_text
 
 
 # ---------------------------------------------------------------------------
@@ -1161,7 +1258,7 @@ async def generate_response(
 
 # Shared state
 task_manager = ClaudeTaskManager(max_concurrent=3)
-anthropic_client: Optional[anthropic.AsyncAnthropic] = None
+gemini_enabled: bool = False  # True once GEMINI_API_KEY is set
 cached_projects: list[dict] = []
 recently_built: list[dict] = []  # [{"name": str, "path": str, "time": float}]
 dispatch_registry = DispatchRegistry()
@@ -1214,13 +1311,13 @@ def _get_usage_for_period(seconds: float | None = None) -> dict:
 
 
 def _cost_from_tokens(input_t: int, output_t: int) -> float:
-    return (input_t / 1_000_000) * 0.80 + (output_t / 1_000_000) * 4.00
+    # Gemini 2.5 Flash pricing: $0.075/$0.30 per MTok in/out
+    # On the free tier (1000 req/day) this is effectively $0.00
+    return (input_t / 1_000_000) * 0.075 + (output_t / 1_000_000) * 0.30
 
 
-def track_usage(response):
-    """Track token usage from an Anthropic API response."""
-    inp = getattr(response.usage, "input_tokens", 0) if hasattr(response, "usage") else 0
-    out = getattr(response.usage, "output_tokens", 0) if hasattr(response, "usage") else 0
+def _track_usage(inp: int, out: int):
+    """Track token usage from a Gemini API call (raw token counts)."""
     _session_tokens["input"] += inp
     _session_tokens["output"] += out
     _session_tokens["api_calls"] += 1
@@ -1336,11 +1433,13 @@ return windowList
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    global anthropic_client, cached_projects
-    if ANTHROPIC_API_KEY:
-        anthropic_client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    global gemini_enabled, cached_projects, _gemini_client
+    if GEMINI_API_KEY:
+        _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+        gemini_enabled = True
+        log.info("Gemini API configured")
     else:
-        log.warning("ANTHROPIC_API_KEY not set — LLM features disabled")
+        log.warning("GEMINI_API_KEY not set — LLM features disabled")
     cached_projects = []
 
     # Start context refresh in a separate thread (never touches event loop)
@@ -1437,11 +1536,10 @@ async def api_list_projects():
 # -- Fast Action Detection (no LLM call) -----------------------------------
 
 def _scan_projects_sync() -> list[dict]:
-    """Synchronous Desktop scan — runs in executor."""
+    """Synchronous project scan — runs in executor."""
     projects = []
-    desktop = Path.home() / "Desktop"
     try:
-        for entry in desktop.iterdir():
+        for entry in DESKTOP_PATH.iterdir():
             if entry.is_dir() and not entry.name.startswith("."):
                 projects.append({"name": entry.name, "path": str(entry), "branch": ""})
     except Exception:
@@ -1527,7 +1625,7 @@ async def handle_open_terminal() -> str:
 
 async def handle_build(target: str) -> str:
     name = _generate_project_name(target)
-    path = str(Path.home() / "Desktop" / name)
+    path = str(DESKTOP_PATH / name)
     os.makedirs(path, exist_ok=True)
 
     # Write CLAUDE.md with clear instructions
@@ -1684,8 +1782,8 @@ async def _do_mail_lookup() -> str:
 
 async def _do_screen_lookup() -> str:
     """Screen describe — runs in thread."""
-    if anthropic_client:
-        return await describe_screen(anthropic_client)
+    if gemini_enabled:
+        return await describe_screen(None)  # screen.py will use its own vision path
     windows = await get_active_windows()
     if windows:
         apps = set(w["app"] for w in windows)
@@ -1773,16 +1871,17 @@ async def handle_browse(text: str, target: str) -> str:
     return "Searching for that, sir."
 
 
-async def handle_research(text: str, target: str, client: anthropic.AsyncAnthropic) -> str:
-    """Deep research with Opus — write results to HTML, open in browser."""
+async def handle_research(text: str, target: str) -> str:
+    """Deep research with Gemini Pro — write results to HTML, open in browser."""
     try:
-        research_response = await client.messages.create(
-            model="claude-opus-4-6",
-            max_tokens=2000,
+        research_text, inp, out = await _call_gemini(
             system=f"You are JARVIS, researching a topic for {USER_NAME}. Be thorough, organized, and cite sources where possible.",
             messages=[{"role": "user", "content": f"Research this thoroughly:\n\n{target}"}],
+            model_name="gemini-2.5-pro",
+            max_tokens=2000,
+            thinking_budget=-1,  # dynamic thinking for deep research
         )
-        research_text = research_response.content[0].text
+        _track_usage(inp, out)
 
         import html as _html
         html_content = f"""<!DOCTYPE html>
@@ -1802,23 +1901,24 @@ blockquote {{ border-left: 3px solid #0ea5e9; margin-left: 0; padding-left: 16px
 <h1>Research: {_html.escape(target[:80])}</h1>
 <div>{research_text.replace(chr(10), '<br>')}</div>
 <hr style="border-color:#222;margin-top:40px">
-<p style="color:#555;font-size:0.8em">Researched by JARVIS using Claude Opus &bull; {datetime.now().strftime('%B %d, %Y %I:%M %p')}</p>
+<p style="color:#555;font-size:0.8em">Researched by JARVIS using Gemini Pro &bull; {datetime.now().strftime('%B %d, %Y %I:%M %p')}</p>
 </body></html>"""
 
-        results_file = Path.home() / "Desktop" / ".jarvis_research.html"
+        results_file = DESKTOP_PATH / ".jarvis_research.html"
         results_file.write_text(html_content)
 
         browser_name = "firefox" if "firefox" in text.lower() else "chrome"
         await open_browser(f"file://{results_file}", browser_name)
 
-        # Short voice summary via Haiku
-        summary = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=80,
+        # Short voice summary via Flash
+        summary, inp2, out2 = await _call_gemini(
             system="Summarize this research in ONE sentence for voice. No markdown.",
             messages=[{"role": "user", "content": research_text[:2000]}],
+            model_name="gemini-3-flash-preview",
+            max_tokens=300,
         )
-        return summary.content[0].text + " Full results are in your browser, sir."
+        _track_usage(inp2, out2)
+        return summary + " Full results are in your browser, sir."
 
     except Exception as e:
         log.error(f"Research failed: {e}")
@@ -1832,9 +1932,8 @@ blockquote {{ border-left: 3px solid #0ea5e9; margin-left: 0; padding-left: 16px
 async def _update_session_summary(
     old_summary: str,
     rotated_messages: list[dict],
-    client: anthropic.AsyncAnthropic,
 ) -> str:
-    """Background Haiku call to update the rolling session summary."""
+    """Background Flash call to update the rolling session summary."""
     prompt = f"""Update this conversation summary to include the new messages.
 
 Current summary: {old_summary or '(start of conversation)'}
@@ -1845,12 +1944,14 @@ New messages to incorporate:
 Write an updated summary in 2-4 sentences capturing the key topics, decisions, and context. Be concise."""
 
     try:
-        response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=200,
+        result, inp, out = await _call_gemini(
+            system="You are a conversation summarizer. Be concise and factual.",
             messages=[{"role": "user", "content": prompt}],
+            model_name="gemini-3-flash-preview",
+            max_tokens=500,
         )
-        return response.content[0].text.strip()
+        _track_usage(inp, out)
+        return result.strip()
     except Exception as e:
         log.warning(f"Summary update failed: {e}")
         return old_summary  # Keep old summary on failure
@@ -1915,6 +2016,11 @@ async def voice_handler(ws: WebSocket):
 
             async def _send_greeting():
                 try:
+                    # Wait for the connection to fully stabilise.
+                    # Browsers often close/reopen the WSS connection once
+                    # before settling, and edge-tts takes ~1s to generate
+                    # audio — without this delay the send lands on a stale socket.
+                    await asyncio.sleep(0.5)
                     audio_bytes = await synthesize_speech(greeting)
                     if audio_bytes:
                         encoded = base64.b64encode(audio_bytes).decode()
@@ -1923,8 +2029,10 @@ async def voice_handler(ws: WebSocket):
                         history.append({"role": "assistant", "content": greeting})
                         log.info(f"JARVIS: {greeting}")
                         await ws.send_json({"type": "status", "state": "idle"})
-                except Exception as e:
-                    log.warning(f"Greeting failed: {e}")
+                except Exception:
+                    # Swallow silently — connection closed before greeting finished,
+                    # which is normal on first load. JARVIS will respond on first input.
+                    pass
 
             asyncio.create_task(_send_greeting())
 
@@ -2002,7 +2110,7 @@ async def voice_handler(ws: WebSocket):
                                     plan.answers[q["key"]] = q["default"]
                         prompt = await planner.build_prompt()
                         name = _generate_project_name(prompt)
-                        path = str(Path.home() / "Desktop" / name)
+                        path = str(DESKTOP_PATH / name)
                         os.makedirs(path, exist_ok=True)
                         Path(path, "CLAUDE.md").write_text(prompt)
                         did = dispatch_registry.register(name, path, prompt[:200])
@@ -2015,7 +2123,7 @@ async def voice_handler(ws: WebSocket):
                         if result["confirmed"]:
                             prompt = await planner.build_prompt()
                             name = _generate_project_name(prompt)
-                            path = str(Path.home() / "Desktop" / name)
+                            path = str(DESKTOP_PATH / name)
                             os.makedirs(path, exist_ok=True)
                             Path(path, "CLAUDE.md").write_text(prompt)
                             did = dispatch_registry.register(name, path, prompt[:200])
@@ -2041,33 +2149,32 @@ async def voice_handler(ws: WebSocket):
                     else:
                         response_text = "Already in conversation mode, sir."
 
-                # ── WORK MODE: speech → claude -p → Haiku summary → JARVIS voice ──
+                # ── WORK MODE: speech → agent → Flash summary → JARVIS voice ──
                 elif work_session.active:
                     if is_casual_question(user_text):
-                        # Quick chat — bypass claude -p, use Haiku
+                        # Quick chat — bypass agent, use Flash directly
                         response_text = await generate_response(
-                            user_text, anthropic_client, task_manager,
+                            user_text, task_manager,
                             cached_projects, history,
                             last_response=last_jarvis_response,
                             session_summary=session_summary,
                         )
                     else:
-                        # Send to claude -p (full power)
+                        # Send to work session (full power)
                         await ws.send_json({"type": "status", "state": "working"})
-                        log.info(f"Work mode → claude -p: {user_text[:80]}")
+                        log.info(f"Work mode → agent: {user_text[:80]}")
 
                         full_response = await work_session.send(user_text)
 
-                        # Detect if Claude Code is stalling (asking questions instead of building)
-                        if full_response and anthropic_client:
+                        # Detect if agent is stalling (asking questions instead of building)
+                        if full_response and gemini_enabled:
                             stall_words = ["which option", "would you prefer", "would you like me to",
                                            "before I proceed", "before proceeding", "should I",
                                            "do you want me to", "let me know", "please confirm",
                                            "which approach", "what would you"]
                             is_stalling = any(w in full_response.lower() for w in stall_words)
                             if is_stalling and work_session._message_count >= 2:
-                                # Claude Code keeps asking — push it to build
-                                log.info("Claude Code stalling — pushing to build")
+                                log.info("Agent stalling — pushing to build")
                                 push_response = await work_session.send(
                                     "Stop asking questions. Use your best judgment and start building now. "
                                     "Write the actual code files. Go with the simplest reasonable approach."
@@ -2075,30 +2182,29 @@ async def voice_handler(ws: WebSocket):
                                 if push_response:
                                     full_response = push_response
 
-                        # Auto-open any localhost URLs Claude Code mentions
+                        # Auto-open any localhost URLs the agent mentions
                         import re as _re
                         localhost_match = _re.search(r'https?://localhost:\d+', full_response or "")
                         if localhost_match:
                             asyncio.create_task(_execute_browse(localhost_match.group(0)))
                             log.info(f"Auto-opening {localhost_match.group(0)}")
 
-                        # Always summarize work mode responses via Haiku
-                        if full_response and anthropic_client:
+                        # Always summarize work mode responses via Flash
+                        if full_response and gemini_enabled:
                             try:
-                                summary = await anthropic_client.messages.create(
-                                    model="claude-haiku-4-5-20251001",
-                                    max_tokens=100,
+                                response_text, inp, out = await _call_gemini(
                                     system=(
                                         f"You are JARVIS reporting to the user ({USER_NAME}). Summarize what happened in 1-2 sentences. "
                                         "Speak in first person — 'I built', 'I found', 'I set up'. "
                                         "You are talking TO THE USER, not to a coding tool. "
-                                        "NEVER give instructions like 'go ahead and build' or 'set up the frontend' — those are NOT for the user. "
-                                        "NEVER say 'Claude Code'. NEVER output [ACTION:...] tags. "
-                                        "NEVER read out URLs. No markdown. British precision."
+                                        "NEVER give instructions like 'go ahead and build' — those are NOT for the user. "
+                                        "NEVER output [ACTION:...] tags. NEVER read out URLs. No markdown. British precision."
                                     ),
-                                    messages=[{"role": "user", "content": f"Claude Code said:\n{full_response[:2000]}"}],
+                                    messages=[{"role": "user", "content": f"Agent said:\n{full_response[:2000]}"}],
+                                    model_name="gemini-3-flash-preview",
+                                    max_tokens=400,
                                 )
-                                response_text = summary.content[0].text
+                                _track_usage(inp, out)
                             except Exception:
                                 response_text = full_response[:200]
                         else:
@@ -2146,11 +2252,11 @@ async def voice_handler(ws: WebSocket):
                         else:
                             response_text = "Understood, sir."
                     else:
-                        if not anthropic_client:
-                            response_text = "API key not configured."
+                        if not gemini_enabled:
+                            response_text = "Gemini API key not configured."
                         else:
                             response_text = await generate_response(
-                                user_text, anthropic_client, task_manager,
+                                user_text, task_manager,
                                 cached_projects, history,
                                 last_response=last_jarvis_response,
                                 session_summary=session_summary,
@@ -2178,7 +2284,7 @@ async def voice_handler(ws: WebSocket):
                                     # Build in background — JARVIS stays conversational
                                     target = embedded_action["target"]
                                     name = _generate_project_name(target)
-                                    path = str(Path.home() / "Desktop" / name)
+                                    path = str(DESKTOP_PATH / name)
                                     os.makedirs(path, exist_ok=True)
 
                                     # Write detailed CLAUDE.md
@@ -2207,7 +2313,7 @@ async def voice_handler(ws: WebSocket):
                                 elif embedded_action["action"] == "research":
                                     # Research enters work mode too
                                     name = _generate_project_name(embedded_action["target"])
-                                    path = str(Path.home() / "Desktop" / name)
+                                    path = str(DESKTOP_PATH / name)
                                     os.makedirs(path, exist_ok=True)
                                     await work_session.start(path)
                                     asyncio.create_task(
@@ -2303,11 +2409,11 @@ async def voice_handler(ws: WebSocket):
                     messages_since_last_summary = 0
                     # Get messages that are about to be rotated out
                     rotated = history[:-20] if len(history) > 20 else []
-                    if rotated and anthropic_client:
+                    if rotated and gemini_enabled:
                         async def _do_summary():
                             nonlocal session_summary, summary_update_pending
                             session_summary = await _update_session_summary(
-                                session_summary, rotated, anthropic_client
+                                session_summary, rotated
                             )
                             summary_update_pending = False
                         asyncio.create_task(_do_summary())
@@ -2315,8 +2421,13 @@ async def voice_handler(ws: WebSocket):
                         summary_update_pending = False
 
                 # Extract memories in background (doesn't block response)
-                if anthropic_client and len(user_text) > 15:
-                    asyncio.create_task(extract_memories(user_text, response_text, anthropic_client))
+                # Note: extract_memories in memory.py will need its own Gemini update
+                # Note: extract_memories in memory.py will need its own Gemini update separately
+                if gemini_enabled and len(user_text) > 15:
+                    try:
+                        asyncio.create_task(extract_memories(user_text, response_text, None))
+                    except Exception:
+                        pass
 
                 # TTS
                 tts = strip_markdown_for_tts(response_text)
@@ -2413,42 +2524,42 @@ class PreferencesUpdate(BaseModel):
 
 @app.post("/api/settings/keys")
 async def api_settings_keys(body: KeyUpdate):
-    allowed = {"ANTHROPIC_API_KEY", "FISH_API_KEY", "FISH_VOICE_ID", "USER_NAME", "HONORIFIC", "CALENDAR_ACCOUNTS"}
+    allowed = {"GEMINI_API_KEY", "EDGE_TTS_VOICE", "USER_NAME", "HONORIFIC", "CALENDAR_ACCOUNTS"}
     if body.key_name not in allowed:
         return JSONResponse({"success": False, "error": "Invalid key name"}, status_code=400)
     _write_env_key(body.key_name, body.key_value)
+    # Re-configure Gemini live if the key just changed
+    if body.key_name == "GEMINI_API_KEY" and body.key_value:
+        global gemini_enabled, _gemini_client
+        _gemini_client = genai.Client(api_key=body.key_value)
+        gemini_enabled = True
     return {"success": True}
 
-@app.post("/api/settings/test-anthropic")
-async def api_test_anthropic(body: KeyTest):
-    key = body.key_value or os.getenv("ANTHROPIC_API_KEY", "")
+@app.post("/api/settings/test-gemini")
+async def api_test_gemini(body: KeyTest):
+    key = body.key_value or os.getenv("GEMINI_API_KEY", "")
     if not key:
         return {"valid": False, "error": "No key provided"}
     try:
-        client = anthropic.AsyncAnthropic(api_key=key)
-        await client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=10, messages=[{"role": "user", "content": "Hi"}])
+        client = genai.Client(api_key=key)
+        response = await client.aio.models.generate_content(
+            model="gemini-3-flash-preview",
+            contents="Hi",
+        )
+        _ = response.text  # will raise if blocked/empty
         return {"valid": True}
     except Exception as e:
         return {"valid": False, "error": str(e)[:200]}
 
-@app.post("/api/settings/test-fish")
-async def api_test_fish(body: KeyTest):
-    key = body.key_value or os.getenv("FISH_API_KEY", "")
-    if not key:
-        return {"valid": False, "error": "No key provided"}
+@app.post("/api/settings/test-tts")
+async def api_test_tts(body: KeyTest):
+    """Test edge-tts — no API key needed, just verify the voice works."""
+    voice = body.key_value or EDGE_TTS_VOICE
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                "https://api.fish.audio/v1/tts",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"text": "test", "reference_id": FISH_VOICE_ID},
-            )
-            if resp.status_code in (200, 201):
-                return {"valid": True}
-            elif resp.status_code == 401:
-                return {"valid": False, "error": "Invalid API key"}
-            else:
-                return {"valid": False, "error": f"HTTP {resp.status_code}"}
+        audio = await synthesize_speech("Testing audio, sir.")
+        if audio and len(audio) > 100:
+            return {"valid": True, "voice": voice}
+        return {"valid": False, "error": "No audio returned"}
     except Exception as e:
         return {"valid": False, "error": str(e)[:200]}
 
@@ -2456,7 +2567,7 @@ async def api_test_fish(body: KeyTest):
 async def api_settings_status():
     import shutil as _shutil
     _, env_dict = _read_env()
-    claude_installed = _shutil.which("claude") is not None
+    gemini_cli_installed = _shutil.which("gemini") is not None
     calendar_ok = mail_ok = notes_ok = False
     try: await get_todays_events(); calendar_ok = True
     except Exception: pass
@@ -2470,7 +2581,7 @@ async def api_settings_status():
     try: task_count = len(get_open_tasks())
     except Exception: pass
     return {
-        "claude_code_installed": claude_installed,
+        "gemini_cli_installed": gemini_cli_installed,
         "calendar_accessible": calendar_ok,
         "mail_accessible": mail_ok,
         "notes_accessible": notes_ok,
@@ -2479,9 +2590,8 @@ async def api_settings_status():
         "server_port": 8340,
         "uptime_seconds": int(time.time() - _session_start),
         "env_keys_set": {
-            "anthropic": bool(env_dict.get("ANTHROPIC_API_KEY", "").strip() and env_dict.get("ANTHROPIC_API_KEY", "") != "your-anthropic-api-key-here"),
-            "fish_audio": bool(env_dict.get("FISH_API_KEY", "").strip() and env_dict.get("FISH_API_KEY", "") != "your-fish-audio-api-key-here"),
-            "fish_voice_id": bool(env_dict.get("FISH_VOICE_ID", "").strip()),
+            "gemini": bool(env_dict.get("GEMINI_API_KEY", "").strip()),
+            "edge_tts_voice": env_dict.get("EDGE_TTS_VOICE", EDGE_TTS_VOICE),
             "user_name": env_dict.get("USER_NAME", ""),
         },
     }
