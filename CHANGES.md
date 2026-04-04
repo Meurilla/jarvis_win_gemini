@@ -52,356 +52,377 @@ with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
     # handle still open here — Playwright can't write on Windows
 
 # AFTER (Windows-safe — handle closed before Playwright writes)
-tmp = tempfile.NamedTemporaryFile(suffix=".png", prefix="jarvis_ss_", delete=False)
-path = tmp.name
-tmp.close()  # Release handle immediately
+tmp_fd, path = tempfile.mkstemp(suffix=".png", prefix="jarvis_screenshot_")
+os.close(tmp_fd)  # Release handle immediately
 # Playwright writes freely now
 ```
 
-**Race condition — asyncio.Lock:**
+**Dead code removed — unreachable sleep in `visit()`:**
 ```python
-# BEFORE (no synchronization)
-async def _ensure_browser(self):
-    if self._browser and self._context:
-        return
-    # second coroutine can enter here simultaneously
+# BEFORE (sleep after return — never executes)
+return PageContent(...)
+await asyncio.sleep(3)  # dead code
 
-# AFTER (double-checked locking pattern)
-async def _ensure_browser(self):
-    if self._browser and self._context:
-        return
-    async with self._lock:
-        if self._browser and self._context:  # re-check after acquiring
-            return
-        # safe to launch now
+# AFTER (sleep before return — actually runs)
+await asyncio.sleep(3)
+return PageContent(...)
 ```
 
-**Page lifecycle — finally blocks:**
+**Empty query guard in `search()`:**
 ```python
-# BEFORE (pages leaked on exception)
-page = await self._new_page()
-await page.goto(url)
-data = await self._extract_text(page)
-return data  # page never closed if extract_text raises
+# BEFORE (hits DuckDuckGo with blank query)
+async def search(self, query: str) -> list[SearchResult]:
+    page = await self._new_page()
 
-# AFTER (always closed)
-page = await self._new_page()
+# AFTER (returns early on empty input)
+async def search(self, query: str) -> list[SearchResult]:
+    if not query:
+        return []
+```
+
+**Platform-aware User-Agent:**
+```python
+# BEFORE (always spoofed macOS Chrome regardless of OS)
+USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)..."
+
+# AFTER (detects OS at runtime, sends matching UA)
+_OS = platform.system()
+if _OS == "Windows":
+    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)..."
+elif _OS == "Darwin":
+    USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)..."
+else:
+    USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64)..."
+```
+
+**Cleanup on failed screenshot:**
+```python
+# AFTER — empty temp file removed on failure
 try:
-    await page.goto(url)
-    data = await self._extract_text(page)
-    return data
-finally:
-    await page.close()  # runs even if exception is raised
-```
-
-**ResearchResult — structured for report writing:**
-```python
-# BEFORE (flat string only)
-@dataclass
-class ResearchResult:
-    topic: str
-    sources: list[str]
-    summary: str          # single concatenated string
-
-# AFTER (per-page content + prompt builder)
-@dataclass
-class ResearchResult:
-    topic: str
-    sources: list[str]
-    pages: list[PageContent]   # full content per page
-    summary: str
-    key_findings: list[str]
-
-    def to_prompt_context(self, max_chars_per_page: int = 3000) -> str:
-        # Formats scraped content as a structured prompt section
-        # consumed by server.py _execute_research() report writer
-```
-
-**Headless toggle:**
-```python
-HEADLESS = os.getenv("BROWSER_HEADLESS", "false").lower() == "true"
+    if path and Path(path).exists() and Path(path).stat().st_size == 0:
+        Path(path).unlink()
+except Exception:
+    pass
 ```
 
 ## What Was Added
 
-- `BROWSER_HEADLESS` env var (default `false` — visible, as before)
-- `is_running` property to check browser state without triggering launch
-- Low-content page filtering in `research()` — pages under 50 words are skipped
-  (bot-detection pages that return a blank body polluted reports)
-- `close()` is now idempotent — safe to call multiple times or if browser
-  never launched
-
-## Integration Change — server.py
-
-**Lifespan wiring** (browser now shared across all requests):
-```python
-# Startup
-application.state.browser = JarvisBrowser()
-
-# Shutdown
-await application.state.browser.close()
-```
-
-**_execute_research() — two-stage pipeline:**
-
-| Stage | What happens |
-|-------|-------------|
-| 1 | `browser.research()` scrapes real web content → `ResearchResult` |
-| 2 | Gemini Flash writes HTML report from scraped content |
-| Fallback A | If scrape fails → Gemini writes from its own knowledge |
-| Fallback B | If Gemini unavailable → plain Google search opened |
-
-Voice notification now reports the actual number of sources visited:
-> "Research complete, sir. I pulled from 3 sources and the report is open in your browser."
-
-**file:/// URL — forward slashes for Windows browser compatibility:**
-```python
-# BEFORE (backslashes break file:// URLs in browsers on Windows)
-await open_browser(f"file://{report_path}")
-
-# AFTER (forward slashes work on all platforms)
-await open_browser(f"file:///{report_path}".replace("\\", "/"))
-```
+- `tempfile.mkstemp()` replacing deprecated `tempfile.mktemp()` — atomic and safe
+- Empty query guard in `search()` — returns early rather than hitting DDG blank
+- Platform-aware User-Agent — Windows, macOS, and Linux all send correct UA
+- Dead code removed — unreachable `asyncio.sleep()` after `return` in `visit()`
+- Failed screenshot cleanup — empty temp files removed on error
 
 ---
 
-# ✅ FIXED: dispatch_registry.py — Connection Pooling & Correct Deduplication
+# ✅ FIXED: requirements.txt — Missing and Incorrect Dependencies
 
 ## What Was Wrong
 
-- **New DB connection on every call** — `_get_db()` opened and closed a fresh
-  `sqlite3.connect()` on every single method call. With concurrent dispatches
-  this created unnecessary overhead and WAL file contention. Windows enforces
-  stricter file locking than macOS, making this more likely to cause `database
-  is locked` errors under load.
-- **Broken deduplication in `format_for_prompt()`** — the check `if d not in active`
-  compared Python dict objects by identity, not value. Two dicts with identical
-  content are never `==` by identity, so completed dispatches were never actually
-  deduplicated out of the prompt context.
-- **WAL files grew unboundedly** — without periodic checkpointing, SQLite WAL
-  files accumulate every write indefinitely. On a long-running Windows process
-  this can grow to hundreds of megabytes.
-- **`get_recent_for_project()` window too short** — the default `max_age_seconds`
-  was 300 (5 minutes). If a build took longer than 5 minutes, JARVIS would not
-  find the completed result and would re-dispatch the same project unnecessarily.
-- **No `get_all_for_project()`** — no way to retrieve full dispatch history for
-  a project across sessions for "what happened with X" queries.
-- **No cap on stored/surfaced content** — a very long agent response could silently
-  bloat the system prompt on every subsequent call.
-
-## What Was Causing It
-
-The open/close-per-call pattern was a copy of a simple script pattern, not
-appropriate for a long-running server. The deduplication bug was a Python
-gotcha — `dict in list` uses `__eq__` which works by value for dicts, but
-the original code was comparing against a list of `sqlite3.Row` objects
-converted to dicts mid-loop, where the reference chain made identity comparison
-the effective behavior.
+- **`anthropic` listed but no longer used** — the Windows port replaced all
+  Anthropic SDK calls with `google-genai`. Listing it caused confusion and
+  an unnecessary install.
+- **`google-genai` missing** — the package imported throughout as
+  `from google import genai` was never listed in requirements.
+- **`edge-tts` missing** — the TTS engine used by `server.py` was absent,
+  meaning a fresh install would fail at runtime with no clear error.
+- **`pytest` and `pytest-asyncio` missing** — the test suite in `/tests/`
+  requires both; neither was listed.
+- **`npm install -g @google/gemini-cli` in requirements.txt** — this is a
+  shell command, not a Python package. pip would error trying to install it.
 
 ## How It Was Fixed
 
-**Thread-local connection pool:**
-```python
-# BEFORE (new connection every call)
-def _get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn  # caller closes it — or forgets to
+Removed `anthropic` and the invalid npm line. Added all missing packages:
 
-# AFTER (one connection per thread, reused)
-_local = threading.local()
-
-def _get_db() -> sqlite3.Connection:
-    if not hasattr(_local, "conn") or _local.conn is None:
-        conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")  # safe + faster on Windows
-        conn.execute("PRAGMA busy_timeout=5000")   # wait 5s on lock, don't fail
-        _local.conn = conn
-    return _local.conn
+```
+google-genai>=1.0.0
+edge-tts>=6.1.9
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
 ```
 
-**WAL checkpoint:**
-```python
-_WRITES_BETWEEN_CHECKPOINT = 50
+Added a commented `pywin32` line for future reference if Windows COM access
+is needed.
 
-def _after_write():
-    global _write_counter
-    with _write_counter_lock:
-        _write_counter += 1
-        should_checkpoint = (_write_counter % _WRITES_BETWEEN_CHECKPOINT == 0)
-    if should_checkpoint:
-        _get_db().execute("PRAGMA wal_checkpoint(PASSIVE)")
+---
+
+# ✅ FIXED: Gemini CLI — Work Mode Agent Not Found
+
+## What Was Wrong
+
+`work_mode.py` searches for a `gemini` or `gemini-cli` binary via
+`shutil.which()` on startup. The warning on boot:
+
+```
+No agentic CLI found (tried: gemini, gemini-cli). Work mode will use
+direct Gemini API — file editing unavailable.
 ```
 
-**Deduplication fixed — ID-based not identity-based:**
-```python
-# BEFORE (never worked — dict identity comparison)
-completed = [d for d in recent if d["status"] == "completed" and d not in active]
+was caused by Gemini CLI simply not being installed, not a code problem.
 
-# AFTER (correct — integer ID comparison)
-active_ids = {d["id"] for d in active}
-completed = [d for d in recent if d["id"] not in active_ids and d["status"] == "completed"]
+## What Was Causing It
+
+The Gemini CLI (`@google/gemini-cli`) is an npm global package that must be
+installed separately. It is not bundled with the project and was not documented
+clearly as a required step after cloning.
+
+## How It Was Fixed
+
+Installed via npm and authenticated:
+
+```bash
+npm install -g @google/gemini-cli
+gemini auth login
 ```
 
-**Recency window increased:**
+After installation `shutil.which("gemini")` resolves correctly and the warning
+is gone on next boot. No code changes were required.
+
+---
+
+# ✅ REFACTORED: conversation.py — Full Rewrite with Clean Server Interface
+
+## What Was Wrong
+
+- **Orphaned module** — `conversation.py` was never imported by `server.py` or
+  any other module. All the session tracking infrastructure it contained was
+  completely unused.
+- **`modify_plan()` used fragile keyword matching** — detecting modifications
+  via hardcoded keywords like "instead of", "add", "remove" would break on any
+  natural phrasing that didn't match exactly.
+- **`SESSION_TIMEOUT_SECONDS = 300`** — five minutes was far too short for a
+  real working session. The timeout check ran on property access but nothing
+  called it on a timer anyway.
+- **`ConversationMode` and `PlanningSession`** — two classes present in the
+  original that were orphaned and conflicted with state tracking already in
+  `server.py`.
+- **No defined interface** — no clear contract between what `conversation.py`
+  exposed and what `server.py` would call, making integration guesswork.
+
+## What Was Causing It
+
+The module was written ahead of its integration — the interface was never
+finalized and `server.py` was never updated to use it.
+
+## How It Was Fixed
+
+Complete rewrite around a clean, documented interface:
+
+```python
+session.add_exchange(role, content)      # called every turn, both sides
+session.get_context() -> str             # injected into every Gemini system prompt
+session.log_plan(plan)                   # planner handoff on task confirmation
+session.modify_plan(user_text, client)   # Gemini-powered plan modification
+session.query(user_text, client)         # JARVIS-voiced session memory queries
+session.close(reason)                    # clean shutdown on WS disconnect
+```
+
+**`modify_plan()` — Gemini replaces keyword matching:**
+```python
+# BEFORE (broke on any non-matching phrasing)
+if "instead of" in answer_lower:
+    ...
+elif "add" in answer_lower:
+    ...
+
+# AFTER (Gemini parses intent, returns structured JSON)
+config = genai_types.GenerateContentConfig(system_instruction=system, ...)
+response = await client.aio.models.generate_content(
+    model="gemini-2.0-flash-preview",
+    contents=user_text,
+    config=config,
+)
+data = json.loads(response.text)
+# applies modification via _apply_modification()
+```
+
+**Session timeout raised:**
 ```python
 # BEFORE
-DEFAULT_RECENCY_SECONDS = 300   # 5 minutes — too short for real builds
+SESSION_TIMEOUT_SECONDS = 300   # 5 minutes — too short
 
 # AFTER
-DEFAULT_RECENCY_SECONDS = 600   # 10 minutes — covers most builds
-# Pass max_age_seconds=0 to disable the filter entirely
+SESSION_TIMEOUT_SECONDS = 1800  # 30 minutes — realistic working session
 ```
 
 ## What Was Added
 
-- `get_all_for_project(project_name, limit)` — full dispatch history for a project
-- `SUMMARY_MAX_CHARS = 200` and `RESPONSE_MAX_CHARS = 5000` — enforced at write
-  time and prompt formatting time
-- `PRAGMA busy_timeout=5000` — instead of immediately raising `database is locked`,
-  SQLite waits up to 5 seconds, which handles Windows' longer lock hold times
-- `close_thread_connection()` — explicit cleanup for thread pool teardown if needed
+- `Decision` dataclass — structured key/value log of everything agreed upon
+- `PlanSummary` dataclass — living record of the current plan updated as
+  planner answers are collected
+- `log_plan()` — receives completed `Plan` from `planner.py` and converts
+  its answers into structured `Decision` entries
+- `log_decision()` — direct decision logging for one-off facts outside planning
+- `mark_plan_complete()` — called when a dispatch finishes to update plan status
+- `get_context()` — concise formatted string injected into every Gemini call
+  so decisions survive message history truncation
 
 ---
 
-# ✅ FIXED: evolution.py — Pattern Matching, Encoding, Shared DB Pool
+# ✅ REFACTORED: planner.py — Ported to Gemini, Windows Compatible
 
 ## What Was Wrong
 
-- **Pattern matching scanned the wrong column** — `analyze_failures()` searched
-  `task_log.prompt` for error keywords like `"import error"` or `"syntaxerror"`.
-  But `task_log.prompt` stores the *user's request* (e.g. "create calculator.py"),
-  not the error output. No prompts ever contained these keywords, so pattern
-  detection never fired.
-- **Double DB scan in `suggest_improvements()`** — it called `analyze_failures()`
-  internally after the caller already had the analysis results, running two full
-  DB queries for the same data.
-- **Double-counting failures** — `total_failures` summed `task_log` failures plus
-  `experiments` failures directly, but the same task is often logged in both
-  tables, inflating the count and triggering evolution prematurely.
-- **utf-8 not enforced** — `path.write_text(yaml.dump(...))` used the system
-  default encoding. On Windows this is `cp1252`, which silently corrupts em-dashes,
-  curly quotes, and any non-ASCII character in template text.
-- **Separate DB connection** — `TemplateEvolver` opened its own `sqlite3.connect()`
-  instead of sharing the thread-local pool from `dispatch_registry.py`, creating
-  a second unnecessary connection per thread.
-- **No directory guard** — `suggest_improvements()` called
-  `self.templates_dir.glob(...)` without checking if the directory exists,
-  raising `FileNotFoundError` on a fresh install before any templates are present.
-- **No logging on write failure** — if `create_new_version()` failed to write the
-  file, it returned `""` silently with no log entry.
+- **Still importing and using `anthropic`** — both `detect_planning_mode()` and
+  `_classify_request()` took an `anthropic.AsyncAnthropic` client and called
+  `claude-haiku-4-5-20251001`. The whole project had been ported to Gemini but
+  `planner.py` was missed.
+- **`DESKTOP_PATH` missing fallback** — hardcoded to `Path.home() / "Desktop"`
+  with no check for whether Desktop exists, unlike `server.py` and `actions.py`
+  which both have the three-way fallback.
+- **`gather_project_context()` only looked for `CLAUDE.md`** — the Windows port
+  uses `TASK.md` in `actions.py` but the context gatherer didn't know about it.
+- **`git log` subprocess had bare `except`** — swallowed `FileNotFoundError`
+  when git wasn't on PATH, making it impossible to distinguish "git not installed"
+  from "not a git repo".
+- **No `Plan.to_context_dict()`** — `conversation.py`'s `log_plan()` needs
+  specific fields from `Plan`; without a defined method the interface was fragile.
 
 ## What Was Causing It
 
-The pattern-matching-wrong-column bug was a design assumption error: the author
-intended to scan error output but the schema stores user prompts in `task_log`.
-The double-scan was a refactoring oversight. The encoding issue is a classic
-Windows trap — macOS defaults to utf-8 system-wide, Windows does not.
+`planner.py` was written before the Gemini port and never updated. The
+`DESKTOP_PATH` inconsistency was a copy-paste omission. The `TASK.md` gap
+was an oversight during the Windows actions refactor.
 
 ## How It Was Fixed
 
-**Pattern matching — documented limitation, prompt text as weak signal:**
+**Gemini port — full replacement of Anthropic client:**
 ```python
-# BEFORE (implicitly assumed task_log stored error output)
-rows = self.db.execute(
-    "SELECT prompt FROM task_log WHERE task_type = ? AND success = 0", ...
-)
-for row in rows:
-    for keyword in pattern_info["keywords"]:
-        if keyword in row["prompt"].lower():  # prompts never contain "importerror"
+# BEFORE
+import anthropic
 
-# AFTER (explicit about what we're scanning and why)
-# task_log stores user prompts, not error output.
-# Scanning prompts is a weak signal — users sometimes describe errors
-# in their request (e.g. "fix the import error in server.py").
-# The experiments table is used for authoritative failure counts.
-texts.extend(row["prompt"].lower() for row in rows)
+async def detect_planning_mode(
+    user_text: str,
+    client: anthropic.AsyncAnthropic = None,
+    ...
+
+# AFTER
+from google import genai
+
+async def detect_planning_mode(
+    user_text: str,
+    client: genai.Client = None,
+    ...
 ```
 
-**Single analysis call:**
-```python
-# BEFORE (two DB scans for same data)
-def suggest_improvements(self, task_type):
-    analysis = self.analyze_failures(task_type)   # scan 1
-    improvements = self.suggest_improvements(...)  # calls analyze_failures again — scan 2
+Both `detect_planning_mode()` and `_classify_request()` now call
+`gemini-2.0-flash-preview` via `client.aio.models.generate_content()`.
 
-# AFTER (one scan, passed through)
-def suggest_improvements(self, task_type):
-    analysis = self.analyze_failures(task_type)   # single scan
-    # use analysis results directly from here
+**`DESKTOP_PATH` — matching fallback logic:**
+```python
+# BEFORE
+DESKTOP_PATH = Path.home() / "Desktop"
+
+# AFTER (matches server.py and actions.py exactly)
+_desktop_env = os.getenv("PROJECTS_DIR", "")
+if _desktop_env:
+    DESKTOP_PATH = Path(_desktop_env)
+else:
+    _default = Path.home() / "Desktop"
+    DESKTOP_PATH = _default if _default.exists() else Path(__file__).parent
 ```
 
-**Double-counting fixed — take max, not sum:**
+**`TASK.md` support in context gatherer:**
 ```python
-# BEFORE (additive — same task counted twice)
-total_failures = len(task_log_rows) + len(experiment_rows)
-
-# AFTER (conservative — take the larger of the two counts)
-total = len(task_log_rows)
-exp_failures = experiments_count
-if exp_failures > total:
-    total = exp_failures
+# AFTER — checks both filenames, doesn't overwrite if already found
+for filename, key in [
+    ("CLAUDE.md", "claude_md"),
+    ("TASK.md", "claude_md"),   # Windows port uses TASK.md
+    ...
+]:
 ```
 
-**utf-8 enforced on read and write:**
+**`git log` specific exception handling:**
 ```python
-# BEFORE (system default — cp1252 on Windows)
-path.read_text()
-path.write_text(yaml.dump(...))
+# BEFORE
+except Exception:
+    pass  # swallows FileNotFoundError silently
 
-# AFTER (explicit utf-8 everywhere)
-path.read_text(encoding="utf-8")
-path.write_text(yaml.dump(..., allow_unicode=True), encoding="utf-8")
+# AFTER
+except FileNotFoundError:
+    log.debug("git not found on PATH — skipping git log")
+except asyncio.TimeoutError:
+    log.debug("git log timed out")
+except Exception as e:
+    log.debug(f"git log failed: {e}")
 ```
 
-**Shared DB pool:**
+**`Plan.to_context_dict()` added:**
 ```python
-# BEFORE (own connection, separate from dispatch_registry pool)
-self.db = sqlite3.connect(self.db_path, check_same_thread=False)
-
-# AFTER (reuses thread-local pool)
-def _get_db():
-    try:
-        from dispatch_registry import _get_db as _pool_get_db
-        return _pool_get_db()
-    except ImportError:
-        # fallback for test isolation
-        ...
+def to_context_dict(self) -> dict:
+    return {
+        "task_type": self.task_type,
+        "original_request": self.original_request,
+        "project": self.project or "",
+        "project_path": self.project_path or "",
+        "answers": self.answers,
+    }
 ```
-
-**Directory guard:**
-```python
-# BEFORE (raises FileNotFoundError on fresh install)
-for f in sorted(self.templates_dir.glob(f"{task_type}*.yaml")):
-
-# AFTER (returns None cleanly)
-def _find_latest_template(self, task_type):
-    if not self.templates_dir.exists():
-        log.warning(f"Templates directory not found: {self.templates_dir}")
-        return None
-    matches = sorted(self.templates_dir.glob(f"{task_type}*.yaml"))
-    return matches[-1] if matches else None
-```
-
-**`allow_unicode=True` on yaml.dump:**
-
-Without this flag PyYAML escapes all non-ASCII characters as `\uXXXX` sequences
-in the saved YAML file, making template diffs unreadable and breaking any
-template content that contains formatted text.
 
 ## What Was Added
 
-- `runtime_error` failure pattern — catches tracebacks, unhandled exceptions,
-  and crash reports that the original pattern set missed
-- Explicit `log.info` / `log.error` on every version write outcome — no more
-  silent failures
-- `_find_latest_template()` and `_load_template()` extracted as private helpers
-  to eliminate repeated glob + yaml.safe_load boilerplate across methods
-- Constructor no longer takes `db_path` — DB location is determined by the
-  shared pool, keeping it consistent across the whole application
+- `Plan.to_context_dict()` — clean serialization for `conversation.py` consumption
+- `TASK.md` lookup in `gather_project_context()`
+- Specific `FileNotFoundError` and `TimeoutError` handling for git subprocess
+- `DESKTOP_PATH` three-way fallback consistent with the rest of the codebase
+
+---
+
+# ✅ INTEGRATED: server.py — conversation.py Wired into Voice Loop
+
+## What Was Wrong
+
+`conversation.py` existed but was never imported or called anywhere in
+`server.py`. Every WebSocket session had no structured memory of decisions
+made during the conversation. If message history was truncated at 20 messages,
+any decisions made earlier were invisible to Gemini.
+
+## How It Was Fixed
+
+Eight integration points added to `server.py` (all additive, nothing deleted):
+
+| # | Location | Change |
+|---|----------|--------|
+| 1 | WS handler init | Instantiate `ConversationSession` |
+| 2 | User transcript | `add_exchange("user", user_text)` |
+| 3 | `detect_action_fast()` | Session query fast-path detector |
+| 4 | Fast action handler | Handle `query_session` action |
+| 5 | `generate_response()` | Inject `get_context()` into system prompt |
+| 6 | Both `generate_response()` call sites | Pass `conversation_context` |
+| 7 | Both planner confirmation paths | Call `log_plan()` before `planner.reset()` |
+| 8 | After every JARVIS response | `add_exchange("assistant", response_text)` |
+| 9 | WS disconnect `finally` | `conversation_session.close("disconnected")` |
+
+**Session query fast-path — no Gemini call for simple memory questions:**
+```python
+if any(p in t for p in [
+    "what did we decide", "what did we agree", "what was the plan",
+    "remind me what", "what have we discussed", "what are we building",
+    "what tech stack", "what stack did we",
+]):
+    return {"action": "query_session"}
+```
+
+**Session context injected into every Gemini call:**
+```python
+# generate_response() signature updated
+async def generate_response(
+    ...
+    conversation_context: str = "",   # new parameter
+) -> str:
+
+# Inside generate_response()
+if conversation_context:
+    system += f"\n\nSESSION DECISIONS & PLAN:\n{conversation_context}"
+```
+
+**Planner handoff — decisions survive planner reset:**
+```python
+# Both confirmation paths, before planner.reset()
+conversation_session.log_plan(planner.active_plan)
+planner.reset()
+```
 
 ---
 
