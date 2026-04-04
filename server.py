@@ -44,6 +44,7 @@ from pydantic import BaseModel
 from actions import execute_action, monitor_build, open_terminal, open_browser, open_claude_in_project, _generate_project_name, prompt_existing_terminal
 from work_mode import WorkSession, is_casual_question
 from conversation import ConversationSession
+from browser import JarvisBrowser, ResearchResult
 from screen import get_active_windows, take_screenshot, describe_screen, format_windows_for_context
 from calendar_access import get_todays_events, get_upcoming_events, get_next_event, format_events_for_context, format_schedule_summary, refresh_cache as refresh_calendar_cache
 from mail_access import get_unread_count, get_unread_messages, get_recent_messages, search_mail, read_message, format_unread_summary, format_messages_for_context, format_messages_for_voice
@@ -862,76 +863,184 @@ async def _execute_browse(target: str):
 
 
 async def _execute_research(target: str, ws=None):
-    """Execute research via claude -p in background. Opens report and speaks when done."""
+    """
+    Two-stage research pipeline:
+      Stage 1 — browser.py scrapes real web content → ResearchResult
+      Stage 2 — Gemini Flash writes a structured HTML report from that content
+ 
+    Falls back to a plain Google search if Playwright isn't installed or scraping fails.
+    """
     try:
         name = _generate_project_name(target)
-        path = str(DESKTOP_PATH / name)
-        os.makedirs(path, exist_ok=True)
-
-        prompt = (
-            f"{target}\n\n"
-            f"Research this thoroughly. Find REAL data — not made-up examples.\n"
-            f"Create a well-designed HTML file called `report.html` in the current directory.\n"
-            f"Dark theme, clean typography, organized sections, real links and sources.\n"
-            f"The working directory is: {path}"
-        )
-
-        log.info(f"Research started via claude -p in {path}")
-
-        process = await asyncio.create_subprocess_exec(
-            "claude", "-p", "--output-format", "text", "--dangerously-skip-permissions",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=path,
-        )
-
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(input=prompt.encode()),
-            timeout=300,
-        )
-
-        result = stdout.decode().strip()
-        log.info(f"Research complete ({len(result)} chars)")
-
-        recently_built.append({"name": name, "path": path, "time": time.time()})
-
-        # Find and open any HTML report
-        report = Path(path) / "report.html"
-        if not report.exists():
-            # Check for any HTML file
-            html_files = list(Path(path).glob("*.html"))
-            if html_files:
-                report = html_files[0]
-
-        if report.exists():
-            await open_browser(f"file://{report}")
-            log.info(f"Opened {report.name} in browser")
-
-        # Notify via voice if WebSocket still connected
-        if ws:
+        path = Path(DESKTOP_PATH) / name
+        path.mkdir(parents=True, exist_ok=True)
+ 
+        # ── Stage 1: Scrape ──────────────────────────────────────────────────
+        log.info(f"Research stage 1 — scraping: {target}")
+ 
+        browser: JarvisBrowser = getattr(app.state, "browser", None)
+        research_data: ResearchResult | None = None
+ 
+        if browser:
             try:
-                notify_text = f"Research is complete, sir. Report is open in your browser."
-                audio = await synthesize_speech(notify_text)
+                research_data = await asyncio.wait_for(
+                    browser.research(target, max_sources=3),
+                    timeout=60,
+                )
+                log.info(
+                    f"Scrape complete: {len(research_data.pages)} pages, "
+                    f"{len(research_data.summary)} chars"
+                )
+            except asyncio.TimeoutError:
+                log.warning("Browser research timed out — falling back to Gemini-only report")
+            except Exception as e:
+                log.warning(f"Browser research failed: {e} — falling back to Gemini-only report")
+ 
+        # ── Stage 2: Write report ────────────────────────────────────────────
+        log.info(f"Research stage 2 — writing report: {target}")
+ 
+        if research_data and research_data.pages and gemini_enabled:
+            # Build prompt from scraped content
+            context = research_data.to_prompt_context(max_chars_per_page=3000)
+            system = (
+                "You are JARVIS writing a research report for the user. "
+                "Use ONLY the source content provided — do not invent facts. "
+                "Write a clean, well-structured HTML report. "
+                "Dark theme (#0a0a0a background, #e0e0e0 text, #0ea5e9 headings). "
+                "Sections: Executive Summary, Key Findings, Source Analysis, Recommendations. "
+                "Include real links from the sources. No Lorem Ipsum. "
+                "Output ONLY valid HTML — no markdown, no explanation."
+            )
+            prompt = (
+                f"Write a research report on: {target}\n\n"
+                f"Real source content:\n\n{context}"
+            )
+            report_html, inp, out = await _call_gemini(
+                system=system,
+                messages=[{"role": "user", "content": prompt}],
+                model_name="gemini-3-flash-preview",
+                max_tokens=3000,
+            )
+            _track_usage(inp, out)
+ 
+        elif gemini_enabled:
+            # No scrape data — Gemini writes from its own knowledge
+            log.info("No scrape data — generating knowledge-based report")
+            system = (
+                "You are JARVIS writing a research report. "
+                "Be thorough and accurate. "
+                "Write a clean HTML report with dark theme. "
+                "Sections: Summary, Key Points, Analysis, Recommendations. "
+                "Output ONLY valid HTML."
+            )
+            report_html, inp, out = await _call_gemini(
+                system=system,
+                messages=[{"role": "user", "content": f"Research and report on: {target}"}],
+                model_name="gemini-3-flash-preview",
+                max_tokens=3000,
+            )
+            _track_usage(inp, out)
+ 
+        else:
+            report_html = None
+ 
+        # ── Save and open report ─────────────────────────────────────────────
+        report_path = path / "report.html"
+ 
+        if report_html:
+            # Wrap in full HTML doc if Gemini returned a fragment
+            if not report_html.strip().startswith("<!DOCTYPE"):
+                import html as _html
+                sources_html = ""
+                if research_data and research_data.sources:
+                    links = "".join(
+                        f'<li><a href="{s}" style="color:#0ea5e9">{s}</a></li>'
+                        for s in research_data.sources
+                    )
+                    sources_html = f"<h2>Sources</h2><ul>{links}</ul>"
+ 
+                report_html = f"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>JARVIS Research: {_html.escape(target[:60])}</title>
+<style>
+  body {{ font-family: -apple-system, system-ui, sans-serif; max-width: 860px;
+         margin: 40px auto; padding: 20px; background: #0a0a0a; color: #e0e0e0; line-height: 1.7; }}
+  h1, h2 {{ color: #0ea5e9; }} h1 {{ font-size: 1.4em; border-bottom: 1px solid #222; padding-bottom: 10px; }}
+  h2 {{ font-size: 1.1em; margin-top: 28px; }}
+  a {{ color: #0ea5e9; }} li {{ margin-bottom: 4px; }}
+  .meta {{ color: #555; font-size: 0.8em; margin-top: 40px; border-top: 1px solid #222; padding-top: 12px; }}
+</style>
+</head><body>
+<h1>Research: {_html.escape(target[:80])}</h1>
+{report_html}
+{sources_html}
+<div class="meta">Researched by JARVIS &bull; {datetime.now().strftime('%B %d, %Y %I:%M %p')}</div>
+</body></html>"""
+ 
+            report_path.write_text(report_html, encoding="utf-8")
+            log.info(f"Report saved: {report_path}")
+ 
+            # Open in browser
+            await open_browser(f"file:///{report_path}".replace("\\", "/"))
+ 
+        else:
+            # Total fallback — just open a search
+            from urllib.parse import quote as _quote
+            await open_browser(f"https://www.google.com/search?q={_quote(target)}")
+ 
+        recently_built.append({"name": name, "path": str(path), "time": time.time()})
+ 
+        # ── Voice notification ───────────────────────────────────────────────
+        if ws:
+            source_count = len(research_data.sources) if research_data else 0
+            if source_count:
+                notify = (
+                    f"Research complete, sir. I pulled from {source_count} "
+                    f"{'source' if source_count == 1 else 'sources'} and the report is open in your browser."
+                )
+            else:
+                notify = "Research complete, sir. Report is open in your browser."
+ 
+            try:
+                audio = await synthesize_speech(notify)
                 if audio:
                     await ws.send_json({"type": "status", "state": "speaking"})
-                    await ws.send_json({"type": "audio", "data": base64.b64encode(audio).decode(), "text": notify_text})
+                    await ws.send_json({
+                        "type": "audio",
+                        "data": base64.b64encode(audio).decode(),
+                        "text": notify,
+                    })
                     await ws.send_json({"type": "status", "state": "idle"})
-                    log.info(f"JARVIS: {notify_text}")
+                log.info(f"JARVIS: {notify}")
             except Exception:
-                pass  # WebSocket might be gone
-
+                pass  # WebSocket may be gone
+ 
     except asyncio.TimeoutError:
-        log.error("Research timed out after 5 minutes")
+        log.error("Research pipeline timed out")
         if ws:
             try:
-                audio = await synthesize_speech("Research timed out, sir. It was taking too long.")
+                msg = "Research is taking too long, sir. Pulling up a search instead."
+                audio = await synthesize_speech(msg)
                 if audio:
-                    await ws.send_json({"type": "audio", "data": base64.b64encode(audio).decode(), "text": "Research timed out, sir."})
+                    await ws.send_json({"type": "audio", "data": base64.b64encode(audio).decode(), "text": msg})
+                from urllib.parse import quote as _quote
+                await open_browser(f"https://www.google.com/search?q={_quote(target)}")
             except Exception:
                 pass
+ 
     except Exception as e:
-        log.error(f"Research execution failed: {e}")
+        log.error(f"Research pipeline failed: {e}", exc_info=True)
+        if ws:
+            try:
+                msg = "Had trouble with that research, sir. Pulling up a search instead."
+                audio = await synthesize_speech(msg)
+                if audio:
+                    await ws.send_json({"type": "audio", "data": base64.b64encode(audio).decode(), "text": msg})
+                from urllib.parse import quote as _quote
+                await open_browser(f"https://www.google.com/search?q={_quote(target)}")
+            except Exception:
+                pass
 
 
 async def _focus_terminal_window(project_name: str):
@@ -1444,19 +1553,29 @@ return windowList
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     global gemini_enabled, cached_projects, _gemini_client
+ 
     if GEMINI_API_KEY:
         _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
         gemini_enabled = True
         log.info("Gemini API configured")
     else:
         log.warning("GEMINI_API_KEY not set — LLM features disabled")
+ 
     cached_projects = []
-
-    # Start context refresh in a separate thread (never touches event loop)
+ 
+    # Browser — shared singleton, stays alive for the session
+    application.state.browser = JarvisBrowser()
+    log.info("Browser instance created")
+ 
+    # Start context refresh thread
     _refresh_context_sync()
     log.info("JARVIS server starting")
-
+ 
     yield
+ 
+    # Shutdown — close browser cleanly
+    await application.state.browser.close()
+    log.info("Browser closed on shutdown")
 
 
 app = FastAPI(title="JARVIS Server", version="0.1.0", lifespan=lifespan)
