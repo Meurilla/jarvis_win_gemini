@@ -31,7 +31,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional, Any, cast
 
 from google import genai
 from google.genai import types as genai_types
@@ -742,8 +742,8 @@ async def _call_gemini(
     """Call the Gemini API. Returns (text, input_tokens, output_tokens).
 
     model_name options:
-        "gemini-2.0-flash"   — high-frequency calls (voice, intent, summaries)
-        "gemini-2.5-pro"     — low-frequency calls (deep research, planning)
+        "gemini-2.5-flash-lite"   — high-frequency calls (voice, intent, summaries)
+        "gemini-2.5-flash-lite"     — low-frequency calls (deep research, planning)
 
     thinking_budget:
         0   — thinking disabled (default). Use for voice loop — fastest, no token waste.
@@ -766,22 +766,21 @@ async def _call_gemini(
             "max_output_tokens": max_tokens,
         }
 
-        # Only attach ThinkingConfig when thinking is requested.
-        # Skipping it entirely on the default (0) path avoids SDK version
-        # concerns on the hot voice loop path.
-        if thinking_budget != 0:
-            try:
-                config_kwargs["thinking_config"] = genai_types.ThinkingConfig(
-                    thinking_budget=thinking_budget,
-                )
-            except AttributeError:
-                # SDK version doesn't expose ThinkingConfig — degrade silently.
-                log.debug("ThinkingConfig not available in this SDK version, skipping")
+        # Attach ThinkingConfig explicitly for all calls so gemini-2.5-flash-lite
+        # doesn't consume its default thinking budget on voice loop calls.
+        # thinking_budget=0  → disable thinking (fast voice responses)
+        # thinking_budget=-1 → dynamic thinking (research/planning only)
+        try:
+            config_kwargs["thinking_config"] = genai_types.ThinkingConfig(
+                thinking_budget=thinking_budget,
+            )
+        except AttributeError:
+            log.debug("ThinkingConfig not available in this SDK version, skipping")
 
         config = genai_types.GenerateContentConfig(**config_kwargs)
         response = await client.aio.models.generate_content(
             model=model_name,
-            contents=contents,
+            contents=cast(Any, contents),
             config=config,
         )
 
@@ -818,7 +817,7 @@ async def classify_intent(text: str) -> dict:
         raw, _, _ = await _call_gemini(
             system=system,
             messages=[{"role": "user", "content": text}],
-            model_name="gemini-3-flash-preview",
+            model_name="gemini-2.5-flash-lite",
             max_tokens=400,
         )
         if raw.startswith("```"):
@@ -982,7 +981,7 @@ async def _execute_research(target: str, ws=None):
             report_html, inp, out = await _call_gemini(
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
-                model_name="gemini-3-flash-preview",
+                model_name="gemini-2.5-flash-lite",
                 max_tokens=3000,
             )
             _track_usage(inp, out)
@@ -1000,7 +999,7 @@ async def _execute_research(target: str, ws=None):
             report_html, inp, out = await _call_gemini(
                 system=system,
                 messages=[{"role": "user", "content": f"Research and report on: {target}"}],
-                model_name="gemini-3-flash-preview",
+                model_name="gemini-2.5-flash-lite",
                 max_tokens=3000,
             )
             _track_usage(inp, out)
@@ -1228,7 +1227,7 @@ async def _execute_prompt_project(project_name: str, prompt: str, work_session: 
                     msg, inp, out = await _call_gemini(
                         system=system,
                         messages=[{"role": "user", "content": f"Project: {project_name}\nAgent reported:\n{full_response[:3000]}"}],
-                        model_name="gemini-3-flash-preview",
+                        model_name="gemini-2.5-flash-lite",
                         max_tokens=500,
                     )
                     _track_usage(inp, out)
@@ -1292,7 +1291,7 @@ async def self_work_and_notify(session: WorkSession, prompt: str, ws):
                 msg, inp, out = await _call_gemini(
                     system="You are JARVIS. Summarize what you just completed in 1 sentence. First person — 'I built', 'I set up'. No markdown.",
                     messages=[{"role": "user", "content": f"Agent completed:\n{full_response[:2000]}"}],
-                    model_name="gemini-3-flash-preview",
+                    model_name="gemini-2.5-flash-lite",
                     max_tokens=400,
                 )
                 _track_usage(inp, out)
@@ -1428,8 +1427,8 @@ async def generate_response(
     response_text, inp, out = await _call_gemini(
         system=system,
         messages=messages,
-        model_name="gemini-3-flash-preview",
-        max_tokens=500,  # thinking_budget=0 (default) — no thinking overhead on voice calls
+        model_name="gemini-2.5-flash-lite",
+        max_tokens=600,  # thinking_budget=0 (default) — no thinking overhead on voice calls
     )
     _track_usage(inp, out)
     return response_text
@@ -1888,7 +1887,7 @@ async def handle_show_recent() -> str:
 _active_lookups: dict[str, dict] = {}  # id -> {"type": str, "status": str, "started": float}
 
 
-async def _lookup_and_report(lookup_type: str, lookup_fn, ws, history: Optional[list[dict]] = None, voice_state: Optional[dict] = None):
+async def _lookup_and_report(lookup_type, lookup_fn, ws, history=None):
     """Run a slow lookup, then speak the result back.
 
     JARVIS stays conversational — this runs completely off the main path.
@@ -1910,22 +1909,18 @@ async def _lookup_and_report(lookup_type: str, lookup_fn, ws, history: Optional[
 
         _active_lookups[lookup_id]["status"] = "done"
 
-        # Speak the result — skip audio if user spoke recently to avoid collision
-        if voice_state and time.time() - voice_state["last_user_time"] < 3:
-            log.info(f"Skipping lookup audio for {lookup_type} — user spoke recently")
-            # Result is still stored in history below
-        else:
-            tts = strip_markdown_for_tts(result_text)
-            audio = await synthesize_speech(tts)
-            try:
-                await ws.send_json({"type": "status", "state": "speaking"})
-                if audio:
-                    await ws.send_json({"type": "audio", "data": audio, "text": result_text})
-                else:
-                    await ws.send_json({"type": "text", "text": result_text})
-                await ws.send_json({"type": "status", "state": "idle"})
-            except Exception:
-                pass
+        await asyncio.sleep(2.5)
+        tts = strip_markdown_for_tts(result_text)
+        audio = await synthesize_speech(tts)
+        try:
+            await ws.send_json({"type": "status", "state": "speaking"})
+            if audio:
+                await ws.send_json({"type": "audio", "data": audio, "text": result_text})
+            else:
+                await ws.send_json({"type": "text", "text": result_text})
+            await ws.send_json({"type": "status", "state": "idle"})
+        except Exception:
+            pass
 
         log.info(f"Lookup {lookup_type} complete: {result_text[:80]}")
 
@@ -1983,14 +1978,53 @@ async def _do_mail_lookup() -> str:
 
 
 async def _do_screen_lookup() -> str:
-    """Screen describe — runs in thread."""
-    if gemini_enabled:
-        return await describe_screen(None)  # screen.py will use its own vision path
+    """Capture screen and describe via Gemini vision, fall back to window list."""
+    from screen import take_screenshot, get_active_windows
+ 
+    screenshot_b64 = await take_screenshot()
+    if screenshot_b64 and gemini_enabled and _gemini_client:
+        try:
+            config = genai_types.GenerateContentConfig(
+                max_output_tokens=300,
+            )
+            response = await _gemini_client.aio.models.generate_content(
+                model="gemini-2.5-flash-lite",
+                contents=cast(Any, [
+                    {
+                        "parts": [
+                            {
+                                "inline_data": {
+                                    "mime_type": "image/png",
+                                    "data": screenshot_b64,
+                                }
+                            },
+                            {
+                                "text": (
+                                    "Describe this screenshot in exactly 2 complete sentences. "
+                                    "First sentence: which app is in focus and what file or page is open. "
+                                    "Second sentence: what else is visible in the background. "
+                                    "Be specific — include file names, URLs, function names, document titles. "
+                                    "Do not start with 'Certainly', 'Of course', 'Sure', or any filler. "
+                                    "No markdown. Write in plain prose. "
+                                    "You must finish both sentences completely before stopping."
+                                )
+                            },
+                        ]
+                    }
+                ]),
+                config=config,
+            )
+            text = (response.text or "").strip()
+            if text:
+                return text
+        except Exception as e:
+            log.warning(f"Vision screen description failed: {e} — falling back to window list")
+ 
     windows = await get_active_windows()
     if windows:
-        apps = set(w["app"] for w in windows)
         active = next((w for w in windows if w["frontmost"]), None)
-        result = f"You have {', '.join(apps)} open."
+        apps = set(w["app"] for w in windows if w["app"])
+        result = f"You have {len(windows)} windows open across {len(apps)} apps."
         if active:
             result += f" Currently focused on {active['app']}: {active['title']}."
         return result
@@ -2079,7 +2113,7 @@ async def handle_research(text: str, target: str) -> str:
         research_text, inp, out = await _call_gemini(
             system=f"You are JARVIS, researching a topic for {USER_NAME}. Be thorough, organized, and cite sources where possible.",
             messages=[{"role": "user", "content": f"Research this thoroughly:\n\n{target}"}],
-            model_name="gemini-2.5-pro",
+            model_name="gemini-2.5-flash-lite",
             max_tokens=2000,
             thinking_budget=-1,  # dynamic thinking for deep research
         )
@@ -2116,7 +2150,7 @@ blockquote {{ border-left: 3px solid #0ea5e9; margin-left: 0; padding-left: 16px
         summary, inp2, out2 = await _call_gemini(
             system="Summarize this research in ONE sentence for voice. No markdown.",
             messages=[{"role": "user", "content": research_text[:2000]}],
-            model_name="gemini-3-flash-preview",
+            model_name="gemini-2.5-flash-lite",
             max_tokens=300,
         )
         _track_usage(inp2, out2)
@@ -2149,7 +2183,7 @@ Write an updated summary in 2-4 sentences capturing the key topics, decisions, a
         result, inp, out = await _call_gemini(
             system="You are a conversation summarizer. Be concise and factual.",
             messages=[{"role": "user", "content": prompt}],
-            model_name="gemini-3-flash-preview",
+            model_name="gemini-2.5-flash-lite",
             max_tokens=500,
         )
         _track_usage(inp, out)
@@ -2408,7 +2442,7 @@ async def voice_handler(ws: WebSocket):
                                         "NEVER output [ACTION:...] tags. NEVER read out URLs. No markdown. British precision."
                                     ),
                                     messages=[{"role": "user", "content": f"Agent said:\n{full_response[:2000]}"}],
-                                    model_name="gemini-3-flash-preview",
+                                    model_name="gemini-2.5-flash-lite",
                                     max_tokens=400,
                                 )
                                 _track_usage(inp, out)
@@ -2428,13 +2462,13 @@ async def voice_handler(ws: WebSocket):
                             response_text = await handle_show_recent()
                         elif action["action"] == "describe_screen":
                             response_text = "Taking a look now, sir."
-                            asyncio.create_task(_lookup_and_report("screen", _do_screen_lookup, ws, history=history, voice_state=voice_state))
+                            asyncio.create_task(_lookup_and_report("screen", _do_screen_lookup, ws, history=history))
                         elif action["action"] == "check_calendar":
                             response_text = "Checking your calendar now, sir."
-                            asyncio.create_task(_lookup_and_report("calendar", _do_calendar_lookup, ws, history=history, voice_state=voice_state))
+                            asyncio.create_task(_lookup_and_report("calendar", _do_calendar_lookup, ws, history=history))
                         elif action["action"] == "check_mail":
                             response_text = "Checking your inbox now, sir."
-                            asyncio.create_task(_lookup_and_report("mail", _do_mail_lookup, ws, history=history, voice_state=voice_state))
+                            asyncio.create_task(_lookup_and_report("mail", _do_mail_lookup, ws, history=history))
                         elif action["action"] == "check_dispatch":
                             recent = dispatch_registry.get_most_recent()
                             if not recent:
@@ -2479,8 +2513,10 @@ async def voice_handler(ws: WebSocket):
                             if embedded_action:
                                 log.info(f"LLM embedded action: {embedded_action}")
                                 response_text = clean_response
-                                # Ensure there's always something to speak
-                                if not response_text.strip():
+                                # Screen actions speak via _lookup_and_report — silence any ack
+                                if embedded_action["action"] == "screen":
+                                    response_text = ""
+                                elif not response_text.strip():
                                     action_type = embedded_action["action"]
                                     if action_type == "prompt_project":
                                         proj = embedded_action["target"].split("|||")[0].strip()
@@ -2588,7 +2624,7 @@ async def voice_handler(ws: WebSocket):
                                     else:
                                         asyncio.create_task(create_apple_note("JARVIS Note", target))
                                 elif embedded_action["action"] == "screen":
-                                    asyncio.create_task(_lookup_and_report("screen", _do_screen_lookup, ws, history=history, voice_state=voice_state))
+                                    asyncio.create_task(_lookup_and_report("screen", _do_screen_lookup, ws, history=history))
                                 elif embedded_action["action"] == "read_note":
                                     # Read note in background and report back
                                     async def _read_and_report(search_term, _ws):
@@ -2642,15 +2678,18 @@ async def voice_handler(ws: WebSocket):
                         pass
 
                 # TTS
-                tts = strip_markdown_for_tts(response_text)
-                await ws.send_json({"type": "status", "state": "speaking"})
-                audio = await synthesize_speech(tts)
-                if audio:
-                    await ws.send_json({"type": "audio", "data": base64.b64encode(audio).decode(), "text": response_text})
+                if response_text.strip():
+                    tts = strip_markdown_for_tts(response_text)
+                    await ws.send_json({"type": "status", "state": "speaking"})
+                    audio = await synthesize_speech(tts)
+                    if audio:
+                        await ws.send_json({"type": "audio", "data": base64.b64encode(audio).decode(), "text": response_text})
+                    else:
+                        await ws.send_json({"type": "text", "text": response_text})
+                        await ws.send_json({"type": "status", "state": "idle"})
+                    log.info(f"JARVIS: {response_text}")
                 else:
-                    await ws.send_json({"type": "text", "text": response_text})
                     await ws.send_json({"type": "status", "state": "idle"})
-                log.info(f"JARVIS: {response_text}")
                 conversation_session.add_exchange("assistant", response_text)
                 last_jarvis_response = response_text
 
@@ -2757,7 +2796,7 @@ async def api_test_gemini(body: KeyTest):
     try:
         client = genai.Client(api_key=key)
         response = await client.aio.models.generate_content(
-            model="gemini-3-flash-preview",
+            model="gemini-2.5-flash-lite",
             contents="Hi",
         )
         _ = response.text  # will raise if blocked/empty

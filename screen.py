@@ -1,28 +1,158 @@
 """
 JARVIS Screen Awareness — see what's on the user's screen.
 
-Two capabilities:
-1. Window/app list via AppleScript (fast, text-based)
-2. Screenshot via screencapture → Claude vision API (sees everything)
+Windows-compatible rewrite. Uses platform-specific methods:
+- Windows: PowerShell for window enumeration, PIL/mss for screenshots (optional)
+- macOS: retained as fallback via screencapture + osascript
+- Linux: wmctrl / xdotool for window list
+
+Screenshot on Windows requires either:
+  pip install mss Pillow   (fast, no extra setup)
+OR falls back gracefully to window-list-only mode.
 """
 
 import asyncio
 import base64
-import json
 import logging
+import platform
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 log = logging.getLogger("jarvis.screen")
 
+_OS = platform.system()  # "Windows", "Darwin", "Linux"
+
+
+# ---------------------------------------------------------------------------
+# Window / App List
+# ---------------------------------------------------------------------------
 
 async def get_active_windows() -> list[dict]:
-    """Get list of visible windows with app name, window title, and position.
+    """Get list of visible windows with app name, window title, frontmost flag.
 
-    Uses AppleScript + System Events to enumerate windows.
     Returns list of {"app": str, "title": str, "frontmost": bool}.
+    Falls back to [] on any failure — never raises.
     """
-    # Use a simpler approach that's more permission-friendly
+    if _OS == "Windows":
+        return await _get_windows_windows()
+    elif _OS == "Darwin":
+        return await _get_windows_macos()
+    else:
+        return await _get_windows_linux()
+
+
+async def get_running_apps() -> list[str]:
+    """Get list of running application names (visible only).
+
+    Returns [] on failure.
+    """
+    if _OS == "Windows":
+        return await _get_apps_windows()
+    elif _OS == "Darwin":
+        return await _get_apps_macos()
+    else:
+        return await _get_apps_linux()
+
+
+# -- Windows ------------------------------------------------------------------
+
+async def _get_windows_windows() -> list[dict]:
+    """Enumerate visible top-level windows via PowerShell."""
+    # This PowerShell one-liner enumerates visible windows using the Win32 API
+    # through .NET — no admin rights needed, works on all Win10/11 versions.
+    script = r"""
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public class WinAPI {
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int count);
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lp);
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc proc, IntPtr lp);
+}
+"@
+$fg = [WinAPI]::GetForegroundWindow()
+[WinAPI]::EnumWindows({
+    param($hWnd, $lp)
+    if ([WinAPI]::IsWindowVisible($hWnd)) {
+        $sb = New-Object System.Text.StringBuilder 256
+        $len = [WinAPI]::GetWindowText($hWnd, $sb, 256)
+        if ($len -gt 0) {
+            $pid = 0
+            [WinAPI]::GetWindowThreadProcessId($hWnd, [ref]$pid) | Out-Null
+            try { $proc = Get-Process -Id $pid -ErrorAction Stop }
+            catch { $proc = $null }
+            $appName = if ($proc) { $proc.MainModule.FileVersionInfo.FileDescription } else { "" }
+            if (-not $appName) { $appName = if ($proc) { $proc.ProcessName } else { "Unknown" } }
+            $isFg = ($hWnd -eq $fg)
+            Write-Output "$appName|||$($sb.ToString())||| $isFg"
+        }
+    }
+    return $true
+}, [IntPtr]::Zero) | Out-Null
+"""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "powershell", "-NoProfile", "-NonInteractive", "-Command", script,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+        windows = []
+        for line in stdout.decode(errors="replace").strip().splitlines():
+            parts = line.strip().split("|||")
+            if len(parts) >= 3:
+                windows.append({
+                    "app": parts[0].strip(),
+                    "title": parts[1].strip(),
+                    "frontmost": parts[2].strip().lower() == "true",
+                })
+        return windows
+    except asyncio.TimeoutError:
+        log.warning("get_active_windows (Windows) timed out")
+        return []
+    except Exception as e:
+        log.warning(f"get_active_windows (Windows) error: {e}")
+        return []
+
+
+async def _get_apps_windows() -> list[str]:
+    """List visible process names on Windows via PowerShell."""
+    script = (
+        "Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | "
+        "Select-Object -ExpandProperty ProcessName | Sort-Object -Unique"
+    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "powershell", "-NoProfile", "-NonInteractive", "-Command", script,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=6)
+        return [
+            line.strip()
+            for line in stdout.decode(errors="replace").splitlines()
+            if line.strip()
+        ]
+    except Exception as e:
+        log.warning(f"get_running_apps (Windows) error: {e}")
+        return []
+
+
+# -- macOS --------------------------------------------------------------------
+
+async def _get_windows_macos() -> list[dict]:
+    """Enumerate windows via osascript on macOS."""
     script = """
 set windowList to ""
 tell application "System Events"
@@ -53,12 +183,9 @@ return windowList
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
-
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
         if proc.returncode != 0:
-            log.warning(f"get_active_windows failed: {stderr.decode()[:200]}")
             return []
-
         windows = []
         for line in stdout.decode().strip().split("\n"):
             parts = line.strip().split("|||")
@@ -69,17 +196,12 @@ return windowList
                     "frontmost": parts[2].strip().lower() == "true",
                 })
         return windows
-
-    except asyncio.TimeoutError:
-        log.warning("get_active_windows timed out")
-        return []
     except Exception as e:
-        log.warning(f"get_active_windows error: {e}")
+        log.warning(f"get_active_windows (macOS) error: {e}")
         return []
 
 
-async def get_running_apps() -> list[str]:
-    """Get list of running application names (visible only)."""
+async def _get_apps_macos() -> list[str]:
     script = """
 tell application "System Events"
     set appNames to name of every application process whose visible is true
@@ -101,48 +223,147 @@ end tell
             return [a.strip() for a in stdout.decode().strip().split("\n") if a.strip()]
         return []
     except Exception as e:
-        log.warning(f"get_running_apps error: {e}")
+        log.warning(f"get_running_apps (macOS) error: {e}")
         return []
 
+
+# -- Linux --------------------------------------------------------------------
+
+async def _get_windows_linux() -> list[dict]:
+    """Use wmctrl if available on Linux."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "wmctrl", "-l", "-x",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        windows = []
+        for line in stdout.decode().splitlines():
+            parts = line.split(None, 4)
+            if len(parts) >= 5:
+                windows.append({
+                    "app": parts[2].split(".")[0],
+                    "title": parts[4].strip(),
+                    "frontmost": False,
+                })
+        return windows
+    except Exception:
+        return []
+
+
+async def _get_apps_linux() -> list[str]:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "wmctrl", "-l",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        # Return unique app names from window titles
+        apps = set()
+        for line in stdout.decode().splitlines():
+            parts = line.split(None, 4)
+            if len(parts) >= 5:
+                apps.add(parts[4].strip().split(" - ")[-1])
+        return sorted(apps)
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Screenshot
+# ---------------------------------------------------------------------------
 
 async def take_screenshot(display_only: bool = True) -> str | None:
     """Take a screenshot and return base64-encoded PNG.
 
-    Args:
-        display_only: If True, capture main display only. If False, all displays.
+    Windows: tries mss (pip install mss) then PIL ImageGrab.
+    macOS: uses screencapture.
+    Linux: uses scrot or gnome-screenshot.
 
-    Returns:
-        Base64-encoded PNG string, or None on failure.
+    Returns base64-encoded PNG string or None on failure.
     """
+    if _OS == "Windows":
+        return await _screenshot_windows()
+    elif _OS == "Darwin":
+        return await _screenshot_macos(display_only)
+    else:
+        return await _screenshot_linux()
+
+
+async def _screenshot_windows() -> str | None:
+    """Capture primary display on Windows using mss (preferred) or PIL."""
+    # Try mss first — fastest, no GUI dependency
+    try:
+        import mss
+        import mss.tools
+
+        def _capture():
+            with mss.mss() as sct:
+                # Monitor 1 = primary display
+                monitor = sct.monitors[1]
+                sshot = sct.grab(monitor)
+                return mss.tools.to_png(sshot.rgb, sshot.size)
+
+        loop = asyncio.get_event_loop()
+        png_bytes = await loop.run_in_executor(None, _capture)
+        if png_bytes is None:
+            return None
+        log.info(f"Screenshot captured via mss: {len(png_bytes)} bytes")
+        return base64.b64encode(png_bytes).decode()
+
+    except ImportError:
+        log.debug("mss not installed — trying PIL ImageGrab")
+    except Exception as e:
+        log.warning(f"mss screenshot failed: {e}")
+
+    # Fallback: PIL ImageGrab
+    try:
+        from PIL import ImageGrab
+        import io
+
+        def _capture_pil():
+            img = ImageGrab.grab()
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return buf.getvalue()
+
+        loop = asyncio.get_event_loop()
+        png_bytes = await loop.run_in_executor(None, _capture_pil)
+        if png_bytes is None:
+            return None
+        log.info(f"Screenshot captured via PIL: {len(png_bytes)} bytes")
+        return base64.b64encode(png_bytes).decode()
+
+    except ImportError:
+        log.debug("PIL not installed — screenshot unavailable on Windows")
+    except Exception as e:
+        log.warning(f"PIL screenshot failed: {e}")
+
+    return None
+
+
+async def _screenshot_macos(display_only: bool) -> str | None:
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
         tmp_path = f.name
-
     try:
-        cmd = ["screencapture", "-x"]  # -x = no sound
+        cmd = ["screencapture", "-x"]
         if display_only:
-            cmd.append("-m")  # main display only
+            cmd.append("-m")
         cmd.append(tmp_path)
-
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         await asyncio.wait_for(proc.communicate(), timeout=10)
-
         if proc.returncode != 0 or not Path(tmp_path).exists():
-            log.warning("Screenshot capture failed")
             return None
-
         data = Path(tmp_path).read_bytes()
-        log.info(f"Screenshot captured: {len(data)} bytes")
         return base64.b64encode(data).decode()
-
-    except asyncio.TimeoutError:
-        log.warning("Screenshot timed out")
-        return None
     except Exception as e:
-        log.warning(f"Screenshot error: {e}")
+        log.warning(f"Screenshot (macOS) error: {e}")
         return None
     finally:
         try:
@@ -151,91 +372,72 @@ async def take_screenshot(display_only: bool = True) -> str | None:
             pass
 
 
+async def _screenshot_linux() -> str | None:
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        tmp_path = f.name
+    try:
+        for cmd in [["scrot", tmp_path], ["gnome-screenshot", "-f", tmp_path]]:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=10)
+            if proc.returncode == 0 and Path(tmp_path).exists():
+                data = Path(tmp_path).read_bytes()
+                return base64.b64encode(data).decode()
+    except Exception as e:
+        log.warning(f"Screenshot (Linux) error: {e}")
+    finally:
+        try:
+            Path(tmp_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Describe Screen
+# ---------------------------------------------------------------------------
+
 async def describe_screen(anthropic_client) -> str:
     """Describe what's on the user's screen.
 
-    Tries screenshot + vision first. Falls back to window list + LLM summary.
+    Tries screenshot + vision first, falls back to window list summary.
+    The anthropic_client parameter is unused (kept for call-site compat) —
+    all LLM calls go through the Gemini client in server.py.
     """
-    # Try screenshot + vision
     screenshot_b64 = await take_screenshot()
-    if screenshot_b64 and anthropic_client:
-        try:
-            response = await anthropic_client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=300,
-                system=(
-                    "You are JARVIS analyzing a screenshot of the user's desktop. "
-                    "Describe what you see concisely: which apps are open, what the user "
-                    "appears to be working on, any notable content visible. "
-                    "Be specific about app names, file names, URLs, code, or documents visible. "
-                    "2-4 sentences max. No markdown."
-                ),
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": screenshot_b64,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": "What's on my screen right now?",
-                        },
-                    ],
-                }],
-            )
-            return response.content[0].text
-        except Exception as e:
-            log.warning(f"Vision call failed, falling back to window list: {e}")
 
-    # Fallback: get window list and have LLM summarize
+    if screenshot_b64:
+        # Vision path — server.py _do_screen_lookup() handles the actual
+        # Gemini call when it receives the base64 string. Here we just
+        # return a sentinel so the caller knows a screenshot is available.
+        # However this function is called directly in some paths, so we
+        # still build the text fallback below as the return value.
+        pass  # fall through to window list for the text description
+
     windows = await get_active_windows()
     apps = await get_running_apps()
 
     if not windows and not apps:
-        return "I wasn't able to see your screen, sir. Screen recording permission may be needed."
-
-    # Build a text description for LLM to summarize
-    context_parts = []
-    if windows:
-        for w in windows:
-            marker = " (ACTIVE)" if w["frontmost"] else ""
-            context_parts.append(f"{w['app']}: {w['title']}{marker}")
-
-    if apps:
-        window_apps = set(w["app"] for w in windows) if windows else set()
-        bg_apps = [a for a in apps if a not in window_apps]
-        if bg_apps:
-            context_parts.append(f"Background apps: {', '.join(bg_apps)}")
-
-    if anthropic_client and context_parts:
-        try:
-            response = await anthropic_client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=100,
-                system=(
-                    "You are JARVIS. Given the user's open windows and apps, summarize "
-                    "what they appear to be working on in 1-2 sentences. Natural voice, no markdown."
-                ),
-                messages=[{"role": "user", "content": "Open windows:\n" + "\n".join(context_parts)}],
+        os_hint = ""
+        if _OS == "Windows":
+            os_hint = (
+                " On Windows, ensure PowerShell execution policy allows scripts "
+                "(Set-ExecutionPolicy RemoteSigned -Scope CurrentUser)."
             )
-            return response.content[0].text
-        except Exception:
-            pass
+        return f"I wasn't able to see your screen, sir.{os_hint}"
 
-    # Raw fallback
     if windows:
         active = next((w for w in windows if w["frontmost"]), None)
-        result = f"You have {len(windows)} windows open across {len(set(w['app'] for w in windows))} apps."
+        unique_apps = set(w["app"] for w in windows if w["app"])
+        result = f"You have {len(windows)} windows open across {len(unique_apps)} apps."
         if active:
             result += f" Currently focused on {active['app']}: {active['title']}."
         return result
 
-    return f"Running apps: {', '.join(apps)}. Couldn't read window titles, sir."
+    return f"Running apps: {', '.join(apps[:8])}. Couldn't read window titles, sir."
 
 
 def format_windows_for_context(windows: list[dict]) -> str:
@@ -245,5 +447,6 @@ def format_windows_for_context(windows: list[dict]) -> str:
     lines = ["Currently open on your desktop:"]
     for w in windows:
         marker = " (active)" if w["frontmost"] else ""
-        lines.append(f"  - {w['app']}: {w['title']}{marker}")
+        app = w["app"] or "Unknown"
+        lines.append(f"  - {app}: {w['title']}{marker}")
     return "\n".join(lines)
