@@ -39,3 +39,6 @@ desktop-overlay/node_modules/
 context/
 *.db-shm
 *.db-wal
+
+# Scripts
+sync.bat
