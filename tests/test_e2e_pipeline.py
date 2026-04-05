@@ -4,7 +4,7 @@ End-to-end pipeline test for the JARVIS intelligence layer.
 Exercises the full pipeline: planning mode detection -> prompt assembly ->
 QA verification -> success tracking.
 
-Claude Code execution is mocked for fast, repeatable testing.
+Gemini CLI execution is mocked for fast, repeatable testing.
 """
 
 import os
@@ -93,8 +93,8 @@ async def test_context_gathering(temp_dir):
     context = await gather_project_context(temp_dir)
 
     assert context["name"] == Path(temp_dir).name
-    assert context["requirements_txt"] is not None
-    assert "flask" in context["requirements_txt"]
+    # The refactored gather_project_context uses "prompt_file" (JARVIS_TASK.md)
+    assert context.get("prompt_file") is None  # No prompt file yet
     assert len(context["directory_listing"]) >= 2
 
 
@@ -103,7 +103,8 @@ async def test_context_gathering_nonexistent():
     """Context gatherer handles missing directories gracefully."""
     context = await gather_project_context("/nonexistent/path/12345")
     assert context["name"] == "12345"
-    assert context["claude_md"] is None
+    # Should not contain a prompt file
+    assert context.get("prompt_file") is None
 
 
 # ── Stage 3: Prompt Assembly ──────────────────────────────────────────
@@ -128,7 +129,7 @@ def test_template_no_match():
 
 @pytest.mark.asyncio
 async def test_full_pipeline_mocked(temp_dir, tracker):
-    """Full pipeline with mocked Claude Code execution."""
+    """Full pipeline with mocked Gemini CLI execution."""
     # 1. Planning mode detection
     decision = await detect_planning_mode("Create a Python hello world script")
     assert decision.task_type in ("build", "simple")
@@ -141,7 +142,7 @@ async def test_full_pipeline_mocked(temp_dir, tracker):
     tmpl = get_template("build", "create a Python script")
     # May or may not find a matching template - that's fine
 
-    # 4. Mock Claude Code execution - simulate it creating hello.py
+    # 4. Mock Gemini CLI execution - simulate it creating hello.py
     hello_path = Path(temp_dir, "hello.py")
     hello_path.write_text('print("Hello, World!")\n')
 

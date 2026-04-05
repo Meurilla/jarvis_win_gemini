@@ -2,7 +2,7 @@
 Feedback loop integration test for JARVIS.
 
 Tests the QA verification -> auto-retry -> success tracking pipeline
-using mocked Claude Code execution to guarantee deterministic behavior.
+using mocked Gemini CLI execution to guarantee deterministic behavior.
 """
 
 import sys

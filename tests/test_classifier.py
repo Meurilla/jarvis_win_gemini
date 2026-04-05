@@ -1,12 +1,11 @@
 """
 Test the LLM intent classifier with 20 sample voice command phrases.
 
-Run: python3 tests/test_classifier.py
-Requires: ANTHROPIC_API_KEY in .env or environment
+Run: python tests/test_classifier.py
+Requires: GEMINI_API_KEY in .env or environment
 """
 
 import asyncio
-import json
 import os
 import sys
 from pathlib import Path
@@ -23,20 +22,17 @@ if env_path.exists():
             k, _, v = line.partition("=")
             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
-import anthropic
-
 # Import the classifier and speech corrections
 from server import classify_intent, apply_speech_corrections
 
-
 # Test cases: (input_text, expected_action)
 TEST_CASES = [
-    # open_terminal
+    # open_terminal (Gemini CLI)
     ("open the terminal", "open_terminal"),
-    ("open cloud code", "open_terminal"),
-    ("launch Claude Code", "open_terminal"),
+    ("open gemini code", "open_terminal"),
+    ("launch Gemini", "open_terminal"),
     ("open up the terminal for me", "open_terminal"),
-    ("start clock code", "open_terminal"),
+    ("start jimmy nigh", "open_terminal"),          # misheard "Gemini"
 
     # browse
     ("search for Python tutorials", "browse"),
@@ -60,26 +56,23 @@ TEST_CASES = [
     ("what's the weather like", "chat"),
 ]
 
-
 async def run_tests():
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    # Check Gemini API key (classify_intent uses GEMINI_API_KEY internally)
+    api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key:
-        print("ERROR: ANTHROPIC_API_KEY not set")
+        print("ERROR: GEMINI_API_KEY not set in .env or environment")
         sys.exit(1)
-
-    client = anthropic.AsyncAnthropic(api_key=api_key)
 
     passed = 0
     failed = 0
 
-    print(f"\nRunning {len(TEST_CASES)} classification tests...\n")
+    print(f"\nRunning {len(TEST_CASES)} classification tests with Gemini...\n")
     print(f"{'Input':<45} {'Expected':<15} {'Got':<15} {'Status'}")
     print("-" * 85)
 
     for text, expected in TEST_CASES:
-        # Apply speech corrections first (like the real flow)
         corrected = apply_speech_corrections(text)
-        result = await classify_intent(corrected, client)
+        result = await classify_intent(corrected)
         actual = result["action"]
 
         if actual == expected:
@@ -99,7 +92,6 @@ async def run_tests():
     else:
         print(f"WARNING: {failed} tests failed")
         sys.exit(1)
-
 
 if __name__ == "__main__":
     asyncio.run(run_tests())
