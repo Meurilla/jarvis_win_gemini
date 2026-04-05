@@ -3,7 +3,7 @@ JARVIS Server — Voice AI + Development Orchestration
 
 Handles:
 1. WebSocket voice interface (browser audio <-> LLM <-> TTS)
-2. Claude Code task manager (spawn/manage claude -p subprocesses)
+2. Gemini CLI task manager (spawn/manage gemini -p subprocesses)
 3. Project awareness (scan Desktop for git repos)
 4. REST API for task management
 """
@@ -28,7 +28,7 @@ if _env_path.exists():
             os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any, cast
@@ -42,24 +42,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from actions import execute_action, monitor_build, open_terminal, open_browser, open_claude_in_project, _generate_project_name, prompt_existing_terminal
+from actions import open_terminal, open_browser, _generate_project_name
 from work_mode import WorkSession, is_casual_question
 from qa import qa_agent
 from tracking import success_tracker
 from suggestions import suggest_followup
 from conversation import ConversationSession
 from browser import JarvisBrowser, ResearchResult
-from screen import get_active_windows, take_screenshot, describe_screen, format_windows_for_context
-from calendar_access import get_todays_events, get_upcoming_events, get_next_event, format_events_for_context, format_schedule_summary, refresh_cache as refresh_calendar_cache
-from mail_access import get_unread_count, get_unread_messages, get_recent_messages, search_mail, read_message, format_unread_summary, format_messages_for_context, format_messages_for_voice
+from screen import format_windows_for_context
+from calendar_access import get_todays_events, format_events_for_context, format_schedule_summary, refresh_cache as refresh_calendar_cache
+from mail_access import get_unread_count, get_unread_messages, format_unread_summary
 from memory import (
-    remember, recall, get_open_tasks, create_task, complete_task, search_tasks,
-    create_note, search_notes, get_tasks_for_date, build_memory_context,
+    remember, get_open_tasks, create_task, complete_task,
+    create_note, build_memory_context,
     format_tasks_for_voice, extract_memories, get_important_memories,
 )
-from notes_access import get_recent_notes, read_note, search_notes_apple, create_apple_note
+# from notes_access import get_recent_notes, read_note, search_notes_apple, create_apple_note
 from dispatch_registry import DispatchRegistry
-from planner import TaskPlanner, detect_planning_mode, BYPASS_PHRASES
+from planner import TaskPlanner, BYPASS_PHRASES
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 log = logging.getLogger("jarvis")
@@ -109,26 +109,23 @@ CONVERSATION STYLE:
 - When you don't know something: "I'm afraid I don't have that information, sir" not "I don't know"
 
 SELF-AWARENESS:
-You ARE the JARVIS project at {project_dir} on {user_name}'s computer. Your code is Python (FastAPI server, WebSocket voice, edge-tts for speech, Gemini API for intelligence). You were built by {user_name}. If asked about yourself, your code, how you work, or your line count — use [ACTION:PROMPT_PROJECT] to check the jarvis project. You have full access to your own source code.
+You ARE the JARVIS project at {project_dir} on {user_name}'s Windows machine. Your code is Python (FastAPI server, WebSocket voice, edge-tts for speech, Gemini API for intelligence). You were built by {user_name}. If asked about yourself, your code, how you work, or your line count — use [ACTION:PROMPT_PROJECT] to check the jarvis project. You have full access to your own source code.
 
 YOUR CAPABILITIES (these are REAL and ACTIVE — you CAN do all of these RIGHT NOW):
-- You CAN open Terminal.app via AppleScript
-- You CAN open Google Chrome and browse any URL or search query
-- You CAN spawn Claude Code in a Terminal window for coding tasks
-- You CAN create project folders on the Desktop
+- You CAN open Windows Terminal and launch the Gemini CLI for coding tasks
+- You CAN open Google Chrome or the default browser and browse any URL or search query
+- You CAN spawn Gemini CLI sessions in a terminal window to build projects
+- You CAN create project folders on the Desktop or configured projects directory
 - You CAN check Desktop projects and their git status
 - You CAN plan complex tasks by asking smart questions before executing
-- You CAN see what's on {user_name}'s screen — open windows, active apps, and screenshot vision
-- You CAN read {user_name}'s calendar — today's events, upcoming meetings, schedule overview
-- You CAN read {user_name}'s email (READ-ONLY) — unread count, recent messages, search by sender/subject. You CANNOT send, delete, or modify emails.
-- You CAN read Apple Notes and create NEW notes — but you CANNOT edit or delete existing notes
+- You CAN see what's on {user_name}'s screen — open windows, active apps, and screenshot vision via Gemini
 - You CAN manage tasks — create, complete, and list to-do items with priorities and due dates
-- You CAN help plan {user_name}'s day — combine calendar events, tasks, and priorities into an organized plan
+- You CAN help plan {user_name}'s day — combine tasks and priorities into an organized plan
 - You CAN remember facts about {user_name} — preferences, decisions, goals. Use [ACTION:REMEMBER] to store important info.
 
 DAY PLANNING:
 When {user_name} asks to plan his day or schedule, DO NOT dispatch to a project. Instead:
-1. Look at the calendar context and tasks already in your system prompt
+1. Look at the tasks already in your system prompt
 2. Ask what his priorities are
 3. Help organize by suggesting time blocks and task order
 4. Use [ACTION:ADD_TASK] to create tasks he agrees to
@@ -146,24 +143,24 @@ When {user_name} wants to BUILD something new:
 - NEVER hallucinate progress. If the build is still running, say "Still working on it, sir" — don't make up details about what's happening.
 - NEVER guess localhost ports. Check the DISPATCHES section for the actual URL. If a dispatch says "Running at http://localhost:5174" — use THAT URL, not a guess.
 - When asked to "pull it up" or "show me" — use [ACTION:BROWSE] with the URL from DISPATCHES. Do NOT dispatch to the project again just to find the URL.
-IMPORTANT: Actions like opening Terminal, Chrome, or building projects are handled AUTOMATICALLY by your system — you do NOT need to describe doing them. If the user asks you to build something or search something, your system will handle the execution separately. In your response, just TALK — have a conversation. Don't say "I'll build that now" or "Claude Code is working on..." unless your system has actually triggered the action.
+
+IMPORTANT: Actions like opening a terminal, browser, or building projects are handled AUTOMATICALLY by your system — you do NOT need to describe doing them. If the user asks you to build something or search something, your system will handle the execution separately. In your response, just TALK — have a conversation. Don't say "I'll build that now" or "Gemini is working on..." unless your system has actually triggered the action.
 If the user asks you to do something you genuinely can't do, say "I'm afraid that's beyond my current reach, sir." Don't fake executing actions.
 
 YOUR INTERFACE:
 The user interacts with you through a web browser showing a particle orb visualization that reacts to your voice. The interface has these controls:
-- **Three-dot menu** (top right): contains Settings, Restart Server, and Fix Yourself options
-- **Settings panel**: Opens from the menu. Users can enter API keys (Gemini), test connections, set their name and preferences, and see system status (calendar, mail, notes connectivity). Keys are saved to the .env file.
-- **Mute button**: Toggles your listening on/off. When muted, you can't hear the user. They click it again to unmute.
-- **Restart Server**: Restarts your backend process. Useful if something seems stuck.
-- **Fix Yourself**: Opens Claude Code in your own project directory so you can debug and fix issues in your own code.
-- **The orb**: The glowing particle visualization in the center. It reacts to your voice when speaking, pulses when listening, and swirls when thinking.
-
-If asked about any of these, explain them briefly and naturally. If the user is having trouble, suggest the relevant control: "Try the settings panel — the gear icon in the top right." or "The mute button may be active, sir."
+- Three-dot menu (top right): contains Settings, Restart Server, and Fix Yourself options
+- Settings panel: Opens from the menu. Users can enter API keys (Gemini), test connections, set their name and preferences, and see system status. Keys are saved to the .env file.
+- Mute button: Toggles your listening on/off. When muted, you can't hear the user. They click it again to unmute.
+- Restart Server: Restarts your backend process. Useful if something seems stuck.
+- Fix Yourself: Opens Gemini CLI in your own project directory so you can debug and fix issues in your own code.
+- The orb: The glowing particle visualization in the center. It reacts to your voice when speaking, pulses when listening, and swirls when thinking.
+If asked about any of these, explain them briefly and naturally. If the user is having trouble, suggest the relevant control.
 
 SPEECH-TO-TEXT CORRECTIONS (the user speaks, speech recognition may mishear):
-- "Cloud code" or "cloud" = "Claude Code" or "Claude"
-- "Travis" = "JARVIS"
-- "clock code" = "Claude Code"
+- "Travis" or "Jarvis" mishears = JARVIS
+- "Gemini" mishears = Gemini CLI
+- "Jimmy" or "Jimmy nigh" = Gemini
 
 RESPONSE LENGTH — THIS IS CRITICAL:
 ONE sentence is ideal. TWO is the maximum for the spoken part. Never three.
@@ -172,6 +169,7 @@ Action tags at the end do NOT count toward your sentence limit.
 
 BANNED PHRASES — NEVER USE THESE:
 - "Absolutely" / "Absolutely right"
+- "Certainly" / "Certainly, sir"
 - "Great question"
 - "I'd be happy to"
 - "Of course"
@@ -193,18 +191,20 @@ INSTEAD SAY:
 - "Done, sir."
 - "Terminal is open."
 - "Pulled that up in Chrome."
+- "Gemini is on it, sir."
 
 ACTION SYSTEM:
 When you decide the user needs something DONE (not just discussed), include an action tag in your response:
-- [ACTION:SCREEN] — capture and describe what's visible on the user's screen. Use when user says "look at my screen", "what's running", "what do you see", etc. Do NOT use PROMPT_PROJECT for screen requests.
-- [ACTION:BUILD] description — when user wants a project built. Claude Code does the work.
-- [ACTION:BROWSE] url or search query — when user wants to see a webpage or search result in Chrome
-- [ACTION:RESEARCH] detailed research brief — when user wants real research with real data. Claude Code will browse the web, find real listings/data, and create a report document. Give it a detailed brief of what to find.
-- [ACTION:OPEN_TERMINAL] — when user just wants a fresh Claude Code terminal with no specific project
+- [ACTION:SCREEN] — capture and describe what's visible on the user's screen via Gemini vision. Use when user says "look at my screen", "what's running", "what do you see", etc. Do NOT use PROMPT_PROJECT for screen requests.
+- [ACTION:BUILD] description — when user wants a project built. Gemini CLI does the work in a terminal window.
+- [ACTION:BROWSE] url or search query — when user wants to see a webpage or search result in the browser
+- [ACTION:RESEARCH] detailed research brief — when user wants real research with real data. Gemini will browse the web, find real data, and create an HTML report. Give it a detailed brief of what to find.
+- [ACTION:OPEN_TERMINAL] — when user just wants a fresh Gemini CLI terminal with no specific project
+
 CRITICAL: When the user asks about their SCREEN, what's RUNNING, or what they're LOOKING AT — ALWAYS use [ACTION:SCREEN] or let the fast action system handle it. NEVER use [ACTION:PROMPT_PROJECT] for screen requests. PROMPT_PROJECT is ONLY for working on code projects.
 CRITICAL: Do NOT use ANY action tag for requests about JARVIS itself — "close yourself", "shut down", "exit", "stop", "restart". Respond conversationally. You cannot terminate your own process; suggest the Restart Server option in the menu if relevant.
 
-- [ACTION:PROMPT_PROJECT] project_name ||| prompt — THIS IS YOUR MOST POWERFUL ACTION. Use it whenever the user wants to work on, jump into, resume, check on, or interact with ANY existing project. You connect directly to Claude Code in that project and can read its response. Craft a clear prompt based on what the user wants. Examples:
+- [ACTION:PROMPT_PROJECT] project_name ||| prompt — THIS IS YOUR MOST POWERFUL ACTION. Use it whenever the user wants to work on, jump into, resume, check on, or interact with ANY existing project. You connect directly to Gemini CLI in that project and can read its response. Craft a clear prompt based on what the user wants. Examples:
   "jump into client engine" → [ACTION:PROMPT_PROJECT] The Client Engine ||| What is the current state of this project? Summarize what was being worked on most recently.
   "check for improvements on my-app" → [ACTION:PROMPT_PROJECT] my-app ||| Review the project and identify improvements we should make.
   "resume where we left off on harvey" → [ACTION:PROMPT_PROJECT] harvey ||| Summarize what was being worked on most recently and what we should focus on next.
@@ -215,11 +215,8 @@ CRITICAL: Do NOT use ANY action tag for requests about JARVIS itself — "close 
 - [ACTION:COMPLETE_TASK] task_id — mark a task as done.
 - [ACTION:REMEMBER] content — store an important fact about the user for future context.
   "I prefer React over Vue" → [ACTION:REMEMBER] User prefers React over Vue for frontend projects
-- [ACTION:CREATE_NOTE] title ||| body — create a new Apple Note. For saving plans, ideas, lists.
-  "save that as a note" → [ACTION:CREATE_NOTE] Day Plan March 19 ||| Morning: client calls. Afternoon: TikTok dashboard. Evening: JARVIS improvements.
-- [ACTION:READ_NOTE] title search — read an existing Apple Note by title keyword.
 
-You use Claude Code as your tool to build, research, and write code — but YOU are the one doing the work. Never say "Claude Code did X" or "Claude Code is asking" — say "I built X", "I'm checking on that", "I found X". You ARE the intelligence. Claude Code is just your hands.
+You use Gemini CLI as your tool to build, research, and write code — but YOU are the one doing the work. Never say "Gemini did X" or "Gemini is asking" — say "I built X", "I'm checking on that", "I found X". You ARE the intelligence. Gemini CLI is just your hands.
 
 IMPORTANT: When the user says "jump into X", "work on X", "check on X", "resume X", "go back to X" — ALWAYS use [ACTION:PROMPT_PROJECT]. You have the ability to connect to any project and work on it directly. DO NOT say you can't see terminal history or don't have access — you DO.
 
@@ -234,12 +231,6 @@ IMPORTANT:
 
 SCREEN AWARENESS:
 {screen_context}
-
-SCHEDULE:
-{calendar_context}
-
-EMAIL:
-{mail_context}
 
 ACTIVE TASKS:
 {active_tasks}
@@ -284,7 +275,7 @@ async def fetch_weather() -> str:
 # ---------------------------------------------------------------------------
 
 @dataclass
-class ClaudeTask:
+class GeminiTask:
     id: str
     prompt: str
     status: str = "pending"  # pending, running, completed, failed, cancelled
@@ -316,14 +307,14 @@ class TaskRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Claude Task Manager
+# Gemini Task Manager
 # ---------------------------------------------------------------------------
 
-class ClaudeTaskManager:
-    """Manages background claude -p subprocesses."""
+class GeminiTaskManager:
+    """Manages background gemini -p subprocesses."""
 
     def __init__(self, max_concurrent: int = 3):
-        self._tasks: dict[str, ClaudeTask] = {}
+        self._tasks: dict[str, GeminiTask] = {}
         self._max_concurrent = max_concurrent
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._websockets: list[WebSocket] = []  # for push notifications
@@ -348,7 +339,7 @@ class ClaudeTaskManager:
             self._websockets.remove(ws)
 
     async def spawn(self, prompt: str, working_dir: str = ".") -> str:
-        """Spawn a claude -p subprocess. Returns task_id. Non-blocking."""
+        """Spawn a gemini -p subprocess. Returns task_id. Non-blocking."""
         active = await self.get_active_count()
         if active >= self._max_concurrent:
             raise RuntimeError(
@@ -357,7 +348,7 @@ class ClaudeTaskManager:
             )
 
         task_id = str(uuid.uuid4())[:8]
-        task = ClaudeTask(
+        task = GeminiTask(
             id=task_id,
             prompt=prompt,
             working_dir=working_dir,
@@ -388,7 +379,7 @@ class ClaudeTaskManager:
         name = "-".join(meaningful) if meaningful else "jarvis-project"
         return name
 
-    async def _run_task(self, task: ClaudeTask):
+    async def _run_task(self, task: GeminiTask):
         """Open a terminal window and run the agent visibly."""
         task.status = "running"
         task.started_at = datetime.now()
@@ -407,11 +398,11 @@ class ClaudeTaskManager:
 
         output_file = Path(work_dir) / ".jarvis_output.txt"
 
-        # Resolve agent CLI (gemini, claude, etc.)
-        agent = shutil.which("gemini") or shutil.which("claude")
+        # Resolve agent CLI (gemini, etc.)
+        agent = shutil.which("gemini")
         if not agent:
             task.status = "failed"
-            task.error = "No agent CLI found. Install Gemini CLI or Claude CLI."
+            task.error = "No agent CLI found. Install Gemini CLI."
             task.completed_at = datetime.now()
             await self._notify({
                 "type": "task_complete",
@@ -510,7 +501,7 @@ class ClaudeTaskManager:
         if task.status == "completed":
             asyncio.create_task(self._run_qa(task))
 
-    async def _run_qa(self, task: ClaudeTask, attempt: int = 1):
+    async def _run_qa(self, task: GeminiTask, attempt: int = 1):
         """Run QA verification on a completed task, auto-retry on failure."""
         try:
             qa_result = await qa_agent.verify(task.prompt, task.result, task.working_dir)
@@ -572,10 +563,10 @@ class ClaudeTaskManager:
         except Exception as e:
             log.error(f"QA error for task {task.id}: {e}")
 
-    async def get_status(self, task_id: str) -> Optional[ClaudeTask]:
+    async def get_status(self, task_id: str) -> Optional[GeminiTask]:
         return self._tasks.get(task_id)
 
-    async def list_tasks(self) -> list[ClaudeTask]:
+    async def list_tasks(self) -> list[GeminiTask]:
         return list(self._tasks.values())
 
     async def get_active_count(self) -> int:
@@ -677,13 +668,17 @@ def format_projects_for_prompt(projects: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 
 STT_CORRECTIONS = {
-    r"\bcloud code\b": "Claude Code",
-    r"\bclock code\b": "Claude Code",
-    r"\bquad code\b": "Claude Code",
-    r"\bclawed code\b": "Claude Code",
-    r"\bclod code\b": "Claude Code",
-    r"\bcloud\b": "Claude",
-    r"\bquad\b": "Claude",
+    # Gemini Code mishearings
+    r"\bjimmy nigh code\b": "Gemini Code",
+    r"\bjemini code\b": "Gemini Code",
+    r"\bgem in eye code\b": "Gemini Code",
+    r"\bgemin eye code\b": "Gemini Code",
+    # Gemini mishearings
+    r"\bjimmy nigh\b": "Gemini",
+    r"\bjemini\b": "Gemini",
+    r"\bgem in eye\b": "Gemini",
+    r"\bgemin eye\b": "Gemini",
+    # JARVIS corrections
     r"\btravis\b": "JARVIS",
     r"\bjarves\b": "JARVIS",
 }
@@ -1107,22 +1102,18 @@ async def _execute_research(target: str, ws=None):
 
 
 async def _focus_terminal_window(project_name: str):
-    """Bring a Terminal window matching the project name to front."""
-    escaped = project_name.replace('"', '\\"')
-    script = f'''
-tell application "Terminal"
-    repeat with w in windows
-        if name of w contains "{escaped}" then
-            set index of w to 1
-            activate
-            exit repeat
-        end if
-    end repeat
-end tell
-'''
+    """Bring a terminal window matching the project name to front."""
     try:
+        script = (
+            f'$title = "{project_name}"; '
+            f'Get-Process | Where-Object {{ $_.MainWindowTitle -like "*$title*" }} | '
+            f'ForEach-Object {{ '
+            f'[void][System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory(); '
+            f'Add-Type -AssemblyName Microsoft.VisualBasic; '
+            f'[Microsoft.VisualBasic.Interaction]::AppActivate($_.Id) }}'
+        )
         proc = await asyncio.create_subprocess_exec(
-            "osascript", "-e", script,
+            "powershell", "-NoProfile", "-NonInteractive", "-Command", script,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -1155,10 +1146,10 @@ def _find_project_dir(project_name: str) -> str | None:
 
 
 async def _execute_prompt_project(project_name: str, prompt: str, work_session: WorkSession, ws, dispatch_id: int = 0, history: Optional[list[dict]] = None, voice_state: Optional[dict] = None):
-    """Dispatch a prompt to Claude Code in a project directory.
+    """Dispatch a prompt to Gemini in a project directory.
 
     Runs entirely in the background. JARVIS returns to conversation mode
-    immediately. When Claude Code finishes, JARVIS interrupts to report.
+    immediately. When Gemini finishes, JARVIS interrupts to report.
     """
     try:
         project_dir = _find_project_dir(project_name)
@@ -1188,7 +1179,7 @@ async def _execute_prompt_project(project_name: str, prompt: str, work_session: 
         log.info(f"Dispatching to {project_name} in {project_dir}: {prompt[:80]}")
         dispatch_registry.update_status(dispatch_id, "building")
 
-        # Run claude -p in background
+        # Run gemini -p in background
         full_response = await dispatch.send(prompt)
         await dispatch.stop()
 
@@ -1366,7 +1357,7 @@ async def synthesize_speech(text: str) -> Optional[bytes]:
 
 async def generate_response(
     text: str,
-    task_mgr: ClaudeTaskManager,
+    task_mgr: GeminiTaskManager,
     projects: list[dict],
     conversation_history: list[dict],
     last_response: str = "",
@@ -1439,7 +1430,7 @@ async def generate_response(
 # ---------------------------------------------------------------------------
 
 # Shared state
-task_manager = ClaudeTaskManager(max_concurrent=3)
+task_manager = GeminiTaskManager(max_concurrent=3)
 gemini_enabled: bool = False  # True once GEMINI_API_KEY is set
 cached_projects: list[dict] = []
 recently_built: list[dict] = []  # [{"name": str, "path": str, "time": float}]
@@ -1542,67 +1533,113 @@ def _refresh_context_sync():
     """Run in a SEPARATE THREAD — refreshes screen/calendar/mail context.
 
     This runs completely off the async event loop so it never blocks responses.
+    Windows-compatible: uses PowerShell for window enumeration instead of osascript.
     """
     import threading
+    import subprocess as _sp
 
     def _worker():
         while True:
             try:
-                # Screen — fast
-                try:
-                    proc = __import__("subprocess").run(
-                        ["osascript", "-e", '''
-set windowList to ""
-tell application "System Events"
-    set frontApp to name of first application process whose frontmost is true
-    set visibleApps to every application process whose visible is true
-    repeat with proc in visibleApps
-        set appName to name of proc
-        try
-            set winCount to count of windows of proc
-            if winCount > 0 then
-                repeat with w in (windows of proc)
-                    try
-                        set winTitle to name of w
-                        if winTitle is not "" and winTitle is not missing value then
-                            set windowList to windowList & appName & "|||" & winTitle & "|||" & (appName = frontApp) & linefeed
-                        end if
-                    end try
-                end repeat
-            end if
-        end try
-    end repeat
-end tell
-return windowList
-'''],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    if proc.returncode == 0 and proc.stdout.strip():
-                        windows = []
-                        for line in proc.stdout.strip().split("\n"):
-                            parts = line.strip().split("|||")
-                            if len(parts) >= 3:
-                                windows.append({
-                                    "app": parts[0].strip(),
-                                    "title": parts[1].strip(),
-                                    "frontmost": parts[2].strip().lower() == "true",
-                                })
-                        if windows:
-                            _ctx_cache["screen"] = format_windows_for_context(windows)
-                except Exception:
-                    pass
+                # ── Screen — PowerShell window enumeration ──────────────────
+                if sys.platform == "win32":
+                    script = r"""
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public class WinAPI {
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int count);
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lp);
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc proc, IntPtr lp);
+}
+"@
+$fg = [WinAPI]::GetForegroundWindow()
+[WinAPI]::EnumWindows({
+    param($hWnd, $lp)
+    if ([WinAPI]::IsWindowVisible($hWnd)) {
+        $sb = New-Object System.Text.StringBuilder 256
+        $len = [WinAPI]::GetWindowText($hWnd, $sb, 256)
+        if ($len -gt 0) {
+            $pid = 0
+            [WinAPI]::GetWindowThreadProcessId($hWnd, [ref]$pid) | Out-Null
+            try { $proc = Get-Process -Id $pid -ErrorAction Stop }
+            catch { $proc = $null }
+            $appName = if ($proc) { $proc.MainModule.FileVersionInfo.FileDescription } else { "" }
+            if (-not $appName) { $appName = if ($proc) { $proc.ProcessName } else { "Unknown" } }
+            $isFg = ($hWnd -eq $fg)
+            Write-Output "$appName|||$($sb.ToString())|||$isFg"
+        }
+    }
+    return $true
+}, [IntPtr]::Zero) | Out-Null
+"""
+                    try:
+                        proc = _sp.run(
+                            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                            capture_output=True, text=True, timeout=8,
+                        )
+                        if proc.returncode == 0 and proc.stdout.strip():
+                            windows = []
+                            for line in proc.stdout.strip().splitlines():
+                                parts = line.strip().split("|||")
+                                if len(parts) >= 3:
+                                    windows.append({
+                                        "app": parts[0].strip(),
+                                        "title": parts[1].strip(),
+                                        "frontmost": parts[2].strip().lower() == "true",
+                                    })
+                            if windows:
+                                _ctx_cache["screen"] = format_windows_for_context(windows)
+                    except Exception:
+                        pass
+
+                else:
+                    # Linux fallback — wmctrl
+                    try:
+                        proc = _sp.run(
+                            ["wmctrl", "-l", "-x"],
+                            capture_output=True, text=True, timeout=5,
+                        )
+                        if proc.returncode == 0 and proc.stdout.strip():
+                            windows = []
+                            for line in proc.stdout.strip().splitlines():
+                                parts = line.split(None, 4)
+                                if len(parts) >= 5:
+                                    windows.append({
+                                        "app": parts[2].split(".")[0],
+                                        "title": parts[4].strip(),
+                                        "frontmost": False,
+                                    })
+                            if windows:
+                                _ctx_cache["screen"] = format_windows_for_context(windows)
+                    except Exception:
+                        pass
 
             except Exception as e:
                 log.debug(f"Context thread error: {e}")
 
-            # Weather — refresh every loop (30s is fine, API is fast)
+            # ── Weather — open-meteo, no API key required ───────────────────
             try:
                 import urllib.request, json as _json
-                url = "https://api.open-meteo.com/v1/forecast?latitude=27.77&longitude=-82.64&current=temperature_2m,weathercode&temperature_unit=fahrenheit"
+                url = (
+                    "https://api.open-meteo.com/v1/forecast"
+                    "?latitude=27.77&longitude=-82.64"
+                    "&current=temperature_2m,weathercode"
+                    "&temperature_unit=fahrenheit"
+                )
                 with urllib.request.urlopen(url, timeout=3) as resp:
                     d = _json.loads(resp.read()).get("current", {})
                     temp = d.get("temperature_2m", "?")
-                    _ctx_cache["weather"] = f"Current weather in St. Petersburg, FL: {temp}°F"
+                    _ctx_cache["weather"] = f"Current weather: {temp}°F"
             except Exception:
                 pass
 
@@ -1641,7 +1678,7 @@ async def lifespan(application: FastAPI):
     log.info("Browser closed on shutdown")
 
 
-app = FastAPI(title="JARVIS Server", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="JARVIS Server", version="0.1.2", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1656,7 +1693,7 @@ app.add_middleware(
 
 @app.get("/api/health")
 async def health():
-    return {"status": "online", "name": "JARVIS", "version": "0.1.0"}
+    return {"status": "online", "name": "JARVIS", "version": "0.1.2"}
 
 
 @app.get("/api/tts-test")
@@ -1758,8 +1795,8 @@ def detect_action_fast(text: str) -> dict | None:
                              "what's running on my", "whats running on my", "check my screen"]):
         return {"action": "describe_screen"}
 
-    # Terminal / Claude Code — explicit open requests
-    if any(w in t for w in ["open claude", "start claude", "launch claude", "run claude"]):
+    # Terminal / Gemini Code — explicit open requests
+    if any(w in t for w in ["open gemini", "start gemini", "launch gemini", "run gemini"]):
         return {"action": "open_terminal"}
 
     # Show recent build
@@ -1820,7 +1857,7 @@ def detect_action_fast(text: str) -> dict | None:
 # -- Action Handlers -------------------------------------------------------
 
 async def handle_open_terminal() -> str:
-    result = await open_terminal("claude --dangerously-skip-permissions")
+    result = await open_terminal("gemini")
     return result["confirmation"]
 
 
@@ -1829,29 +1866,16 @@ async def handle_build(target: str) -> str:
     path = str(DESKTOP_PATH / name)
     os.makedirs(path, exist_ok=True)
 
-    # Write CLAUDE.md with clear instructions
-    claude_md = Path(path) / "CLAUDE.md"
-    claude_md.write_text(f"# Task\n\n{target}\n\nBuild this completely. If web app, make index.html work standalone.\n")
-
-    # Write prompt to a file, then pipe it to claude -p
-    # This avoids all shell escaping issues
-    prompt_file = Path(path) / ".jarvis_prompt.txt"
-    prompt_file.write_text(target)
-
-    script = (
-        'tell application "Terminal"\n'
-        "    activate\n"
-        f'    do script "cd {path} && cat .jarvis_prompt.txt | claude -p --dangerously-skip-permissions"\n'
-        "end tell"
+    prompt_file = Path(path) / "JARVIS_TASK.md"
+    prompt_file.write_text(
+        f"# Task\n\n{target}\n\nBuild this completely. If web app, make index.html work standalone.\n",
+        encoding="utf-8",
     )
-    await asyncio.create_subprocess_exec(
-        "osascript", "-e", script,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+
+    await open_terminal(f'cd /d "{path}" && gemini -p < JARVIS_TASK.md')
 
     recently_built.append({"name": name, "path": path, "time": time.time()})
-    return f"On it, sir. Claude Code is working in {name}."
+    return f"On it, sir. Gemini is working in {name}."
 
 
 async def handle_show_recent() -> str:
@@ -1860,23 +1884,20 @@ async def handle_show_recent() -> str:
     last = recently_built[-1]
     project_path = Path(last["path"])
 
-    # Try to find the best file to open
     for name in ["report.html", "index.html"]:
         f = project_path / name
         if f.exists():
-            await open_browser(f"file://{f}")
+            await open_browser(f.as_uri())
             return f"Opened {name} from {last['name']}, sir."
 
-    # Try any HTML file
     html_files = list(project_path.glob("*.html"))
     if html_files:
-        await open_browser(f"file://{html_files[0]}")
+        await open_browser(html_files[0].as_uri())
         return f"Opened {html_files[0].name} from {last['name']}, sir."
 
-    # Fall back to opening the folder in Finder
-    script = f'tell application "Finder"\nactivate\nopen POSIX file "{last["path"]}"\nend tell'
-    await asyncio.create_subprocess_exec("osascript", "-e", script, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    return f"Opened the {last['name']} folder in Finder, sir."
+    import subprocess
+    subprocess.Popen(["explorer", str(project_path)])
+    return f"Opened the {last['name']} folder in Explorer, sir."
 
 
 # ---------------------------------------------------------------------------
@@ -2030,7 +2051,6 @@ async def _do_screen_lookup() -> str:
         return result
     return "Couldn't see the screen, sir."
 
-
 def get_lookup_status() -> str:
     """Get status of active lookups for when user asks 'how's that coming'."""
     if not _active_lookups:
@@ -2044,7 +2064,6 @@ def get_lookup_status() -> str:
         parts.append(f"{lookup['type']} check ({elapsed}s)")
     return "Currently working on: " + ", ".join(parts)
 
-
 def _short_sender(sender: str) -> str:
     """Extract just the name from an email sender string."""
     if "<" in sender:
@@ -2052,7 +2071,6 @@ def _short_sender(sender: str) -> str:
     if "@" in sender:
         return sender.split("@")[0]
     return sender
-
 
 async def handle_browse(text: str, target: str) -> str:
     """Open a URL directly or search. Smart about detecting URLs in speech."""
@@ -2115,10 +2133,9 @@ async def handle_research(text: str, target: str) -> str:
             messages=[{"role": "user", "content": f"Research this thoroughly:\n\n{target}"}],
             model_name="gemini-2.5-flash-lite",
             max_tokens=2000,
-            thinking_budget=-1,  # dynamic thinking for deep research
+            thinking_budget=-1,
         )
         _track_usage(inp, out)
-
         import html as _html
         html_content = f"""<!DOCTYPE html>
 <html><head>
@@ -2137,16 +2154,12 @@ blockquote {{ border-left: 3px solid #0ea5e9; margin-left: 0; padding-left: 16px
 <h1>Research: {_html.escape(target[:80])}</h1>
 <div>{research_text.replace(chr(10), '<br>')}</div>
 <hr style="border-color:#222;margin-top:40px">
-<p style="color:#555;font-size:0.8em">Researched by JARVIS using Gemini Pro &bull; {datetime.now().strftime('%B %d, %Y %I:%M %p')}</p>
+<p style="color:#555;font-size:0.8em">Researched by JARVIS using Gemini &bull; {datetime.now().strftime('%B %d, %Y %I:%M %p')}</p>
 </body></html>"""
-
         results_file = DESKTOP_PATH / ".jarvis_research.html"
-        results_file.write_text(html_content)
-
+        results_file.write_text(html_content, encoding="utf-8")
         browser_name = "firefox" if "firefox" in text.lower() else "chrome"
-        await open_browser(f"file://{results_file}", browser_name)
-
-        # Short voice summary via Flash
+        await open_browser(results_file.as_uri(), browser_name)
         summary, inp2, out2 = await _call_gemini(
             system="Summarize this research in ONE sentence for voice. No markdown.",
             messages=[{"role": "user", "content": research_text[:2000]}],
@@ -2155,7 +2168,6 @@ blockquote {{ border-left: 3px solid #0ea5e9; margin-left: 0; padding-left: 16px
         )
         _track_usage(inp2, out2)
         return summary + " Full results are in your browser, sir."
-
     except Exception as e:
         log.error(f"Research failed: {e}")
         from urllib.parse import quote
@@ -2350,7 +2362,7 @@ async def voice_handler(ws: WebSocket):
                         name = _generate_project_name(prompt)
                         path = str(DESKTOP_PATH / name)
                         os.makedirs(path, exist_ok=True)
-                        Path(path, "CLAUDE.md").write_text(prompt)
+                        Path(path, "JARVIS_TASK.md").write_text(prompt)
                         did = dispatch_registry.register(name, path, prompt[:200])
                         asyncio.create_task(_execute_prompt_project(name, prompt, work_session, ws, dispatch_id=did, history=history, voice_state=voice_state))
                         conversation_session.log_plan(planner.active_plan)
@@ -2364,7 +2376,7 @@ async def voice_handler(ws: WebSocket):
                             name = _generate_project_name(prompt)
                             path = str(DESKTOP_PATH / name)
                             os.makedirs(path, exist_ok=True)
-                            Path(path, "CLAUDE.md").write_text(prompt)
+                            Path(path, "JARVIS_TASK.md").write_text(prompt)
                             did = dispatch_registry.register(name, path, prompt[:200])
                             asyncio.create_task(_execute_prompt_project(name, prompt, work_session, ws, dispatch_id=did, history=history, voice_state=voice_state))
                             conversation_session.log_plan(planner.active_plan)
@@ -2535,8 +2547,8 @@ async def voice_handler(ws: WebSocket):
                                     path = str(DESKTOP_PATH / name)
                                     os.makedirs(path, exist_ok=True)
 
-                                    # Write detailed CLAUDE.md
-                                    Path(path, "CLAUDE.md").write_text(
+                                    # Write detailed JARVIS_TASK.md
+                                    Path(path, "JARVIS_TASK.md").write_text(
                                         f"# Task\n\n{target}\n\n"
                                         "## Instructions\n"
                                         "- BUILD THIS NOW. Do not ask clarifying questions.\n"
@@ -2619,20 +2631,21 @@ async def voice_handler(ws: WebSocket):
                                     target = embedded_action["target"]
                                     if "|||" in target:
                                         title, _, body = target.partition("|||")
-                                        asyncio.create_task(create_apple_note(title.strip(), body.strip()))
+                                        # asyncio.create_task(create_apple_note(title.strip(), body.strip()))
                                         log.info(f"Apple Note created: {title.strip()}")
                                     else:
-                                        asyncio.create_task(create_apple_note("JARVIS Note", target))
+                                        # asyncio.create_task(create_apple_note("JARVIS Note", target))
+                                        pass
                                 elif embedded_action["action"] == "screen":
                                     asyncio.create_task(_lookup_and_report("screen", _do_screen_lookup, ws, history=history))
                                 elif embedded_action["action"] == "read_note":
                                     # Read note in background and report back
                                     async def _read_and_report(search_term, _ws):
-                                        note = await read_note(search_term)
-                                        if note:
-                                            msg = f"Sir, your note '{note['title']}' says: {note['body'][:200]}"
-                                        else:
-                                            msg = f"Couldn't find a note matching '{search_term}', sir."
+                                        # note = await read_note(search_term)
+                                        # if note:
+                                        #     msg = f"Sir, your note '{note['title']}' says: {note['body'][:200]}"
+                                        # else:
+                                        #     msg = f"Couldn't find a note matching '{search_term}', sir."
                                         audio = await synthesize_speech(strip_markdown_for_tts(msg))
                                         if audio and _ws:
                                             try:
@@ -2826,8 +2839,8 @@ async def api_settings_status():
     except Exception: pass
     try: await get_unread_count(); mail_ok = True
     except Exception: pass
-    try: await get_recent_notes(count=1); notes_ok = True
-    except Exception: pass
+    # try: await get_recent_notes(count=1); notes_ok = True
+    # except Exception: pass
     memory_count = task_count = 0
     try: memory_count = len(get_important_memories(limit=9999))
     except Exception: pass
@@ -2885,19 +2898,7 @@ async def api_restart():
 async def api_fix_self():
     """Enter work mode in the JARVIS repo — JARVIS can now fix himself."""
     jarvis_dir = str(Path(__file__).parent)
-    # The work_session is per-WebSocket, so we set a flag that the handler picks up
-    # For now, also open Terminal so user can see
-    script = (
-        'tell application "Terminal"\n'
-        '    activate\n'
-        f'    do script "cd {jarvis_dir} && claude --dangerously-skip-permissions"\n'
-        'end tell'
-    )
-    await asyncio.create_subprocess_exec(
-        "osascript", "-e", script,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    result = await open_terminal(f'cd /d "{jarvis_dir}" && gemini')
     log.info("Work mode: JARVIS repo opened for self-improvement")
     return {"status": "work_mode_active", "path": jarvis_dir}
 
@@ -2943,7 +2944,7 @@ if __name__ == "__main__":
     ws_proto = "wss" if use_ssl else "ws"
 
     print()
-    print("  J.A.R.V.I.S. Server v0.1.0")
+    print("  J.A.R.V.I.S. Server v0.1.2")
     print(f"  WebSocket: {ws_proto}://{args.host}:{args.port}/ws/voice")
     print(f"  REST API:  {proto}://{args.host}:{args.port}/api/")
     print(f"  Tasks:     {proto}://{args.host}:{args.port}/api/tasks")
