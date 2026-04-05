@@ -2463,7 +2463,7 @@ async def voice_handler(ws: WebSocket):
                         else:
                             response_text = full_response
 
-                # ── CHAT MODE: fast keyword detection + Haiku ──
+                # ── CHAT MODE: fast keyword detection + Flash ──
                 else:
                     action = detect_action_fast(user_text)
 
