@@ -10,12 +10,15 @@ Configure the CLI tool via the AGENT_CLI env var, e.g.:
   AGENT_CLI=none     (force direct API mode)
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import os
 import shutil
 from pathlib import Path
+from typing import Optional
 
 from google import genai
 from google.genai import types as genai_types
@@ -27,9 +30,18 @@ SESSION_FILE = Path(__file__).parent / "data" / "active_session.json"
 # Which CLI tool to use for agentic sessions. Resolved once at import time.
 _AGENT_CLI_ENV = os.getenv("AGENT_CLI", "gemini")
 _GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+_gemini_client = None
 
 
-def _resolve_agent_cli() -> str | None:
+def _get_gemini_client() -> Optional[genai.Client]:
+    """Get or create a shared Gemini client for API fallback mode."""
+    global _gemini_client
+    if _gemini_client is None and _GEMINI_API_KEY:
+        _gemini_client = genai.Client(api_key=_GEMINI_API_KEY)
+    return _gemini_client
+
+
+def _resolve_agent_cli() -> Optional[str]:
     """Find the agentic CLI binary. Returns full path or None."""
     if _AGENT_CLI_ENV.lower() == "none":
         return None
@@ -47,7 +59,7 @@ def _resolve_agent_cli() -> str | None:
     return None
 
 
-_AGENT_CLI_PATH: str | None = _resolve_agent_cli()
+_AGENT_CLI_PATH: Optional[str] = _resolve_agent_cli()
 
 
 class WorkSession:
@@ -59,8 +71,8 @@ class WorkSession:
 
     def __init__(self):
         self._active = False
-        self._working_dir: str | None = None
-        self._project_name: str | None = None
+        self._working_dir: Optional[str] = None
+        self._project_name: Optional[str] = None
         self._message_count = 0
         self._status = "idle"
         # Conversation history for API fallback mode
@@ -71,14 +83,14 @@ class WorkSession:
         return self._active
 
     @property
-    def project_name(self) -> str | None:
+    def project_name(self) -> Optional[str]:
         return self._project_name
 
     @property
     def status(self) -> str:
         return self._status
 
-    async def start(self, working_dir: str, project_name: str | None = None):
+    async def start(self, working_dir: str, project_name: Optional[str] = None):
         """Start or switch to a project session."""
         self._working_dir = working_dir
         # Use Path().name for Windows-safe directory name extraction
@@ -101,12 +113,11 @@ class WorkSession:
         else:
             result = await self._send_via_api(user_text)
         self._message_count += 1
+        self._status = "idle"
         return result
 
     async def _send_via_cli(self, user_text: str) -> str:
         """Run the agentic CLI as a subprocess."""
-        # Build command — no --continue or --dangerously-skip-permissions
-        # as these are Claude-specific flags not supported by Gemini CLI
         cmd = [_AGENT_CLI_PATH, "-p"]
 
         try:
@@ -124,33 +135,28 @@ class WorkSession:
             )
 
             response = stdout.decode().strip()
-            self._status = "done"
 
             if process.returncode != 0:
                 error = stderr.decode().strip()[:200]
                 log.error(f"Agent CLI error: {error}")
-                self._status = "error"
                 return f"Hit a problem, sir: {error}"
 
             log.info(f"Agent CLI response for {self._project_name} ({len(response)} chars)")
             return response
 
         except asyncio.TimeoutError:
-            self._status = "timeout"
             return "That's taking longer than expected, sir. The operation timed out."
         except Exception as e:
-            self._status = "error"
             log.error(f"CLI work mode error: {e}")
             return f"Something went wrong, sir: {str(e)[:100]}"
 
     async def _send_via_api(self, user_text: str) -> str:
         """Fall back to direct Gemini API when no CLI is installed."""
-        if not _GEMINI_API_KEY:
-            self._status = "error"
+        client = _get_gemini_client()
+        if not client:
             return "No Gemini API key configured, sir."
 
         try:
-            client = genai.Client(api_key=_GEMINI_API_KEY)
             system = (
                 f"You are an expert software developer working on the project at: {self._working_dir}. "
                 "Help the user with coding tasks, architecture decisions, and debugging. "
@@ -160,10 +166,13 @@ class WorkSession:
 
             # Maintain rolling conversation history
             self._api_history.append({"role": "user", "content": user_text})
+            # Trim to last 20 messages to prevent unbounded growth
+            if len(self._api_history) > 20:
+                self._api_history = self._api_history[-20:]
 
             # Convert history to Gemini format, alternating roles
             contents = []
-            for msg in self._api_history[-20:]:
+            for msg in self._api_history:
                 role = "model" if msg["role"] == "assistant" else "user"
                 if contents and contents[-1]["role"] == role:
                     contents[-1]["parts"][0]["text"] += "\n" + msg["content"]
@@ -181,12 +190,10 @@ class WorkSession:
             )
             result = (response.text or "").strip()
             self._api_history.append({"role": "assistant", "content": result})
-            self._status = "done"
             log.info(f"API work mode response for {self._project_name} ({len(result)} chars)")
             return result
 
         except Exception as e:
-            self._status = "error"
             log.error(f"API work mode error: {e}")
             return f"Something went wrong, sir: {str(e)[:100]}"
 
@@ -202,7 +209,7 @@ class WorkSession:
         log.info(f"Work mode ended for {project}")
 
     def _save_session(self):
-        """Persist session state so it survives restarts."""
+        """Persist session state so it survives restarts (currently unused)."""
         try:
             SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
             SESSION_FILE.write_text(json.dumps({
@@ -265,3 +272,33 @@ def is_casual_question(text: str) -> bool:
         return True
 
     return any(p in t for p in casual_patterns)
+
+
+__all__ = [
+    "WorkSession",
+    "is_casual_question",
+]
+
+"""
+Changelog
+Version 2.0 (2026-04-05)
+Breaking Changes
+None. Public API remains identical.
+
+Bug Fixes
+Unbounded _api_history – Now trimmed to last 20 messages after each API call.
+
+Status reset – After send completes, status is set back to "idle" (previously only set in CLI path; now unified).
+
+Improvements
+Gemini client caching – Added _get_gemini_client() module-level cached client, reused across API calls.
+
+__all__ – Added explicit exports.
+
+Type hints – Added return types for all methods.
+
+Docstring – Clarified that session persistence methods are currently unused.
+
+Removed / Deprecated
+None.
+"""

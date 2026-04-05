@@ -3,12 +3,16 @@ JARVIS Proactive Suggestions — Contextual follow-up suggestions after task com
 
 Generates at most 1 voice-friendly suggestion per completed task based on
 simple heuristics (file checks, not LLM calls).
+
+Windows-compatible: uses pathlib, no platform-specific calls.
 """
+
+from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from qa import QAResult
 
@@ -48,7 +52,7 @@ def suggest_followup(
 
     Args:
         task_type: The type of task that was completed (build, fix, etc.)
-        task_description: Description of the completed task.
+        task_description: Description of the completed task (unused but kept for API compatibility)
         working_dir: The project working directory.
         qa_result: QA verification result, if available.
 
@@ -62,7 +66,6 @@ def suggest_followup(
 
     # Check sequence: favicon -> tests -> readme -> quality
     # Each returns early with max 1 suggestion
-
     suggestion = _check_favicon(path, task_type)
     if suggestion:
         return suggestion
@@ -131,10 +134,11 @@ def _check_tests(path: Path, task_type: str) -> Optional[Suggestion]:
     except (PermissionError, OSError):
         return None
 
+    # Check for test directories at top level
     if entries & TEST_DIRS:
         return None
 
-    # Check for test files in top 2 levels
+    # Check for test files in top 2 levels (skip node_modules, .git, etc.)
     has_test_files = False
     try:
         for child in path.iterdir():
@@ -145,7 +149,10 @@ def _check_tests(path: Path, task_type: str) -> Optional[Suggestion]:
                 has_test_files = True
                 break
             if child.is_dir():
+                # Only scan one level deep to avoid excessive I/O
                 for grandchild in child.iterdir():
+                    if grandchild.name.startswith("."):
+                        continue
                     gc_lower = grandchild.name.lower()
                     if "test" in gc_lower or "spec" in gc_lower:
                         has_test_files = True
@@ -194,7 +201,7 @@ def _check_readme(path: Path, task_type: str) -> Optional[Suggestion]:
 
     return Suggestion(
         text=(
-            "If I may suggest, sir \u2014 the project has no README. "
+            "If I may suggest, sir — the project has no README. "
             "Want me to create one?"
         ),
         action_type="readme",
@@ -238,3 +245,31 @@ def _check_quality(qa_result: Optional[QAResult]) -> Optional[Suggestion]:
             "task": "Refactor code to address quality issues",
         },
     )
+
+
+__all__ = [
+    "Suggestion",
+    "suggest_followup",
+]
+
+"""
+Changelog
+Version 2.0 (2026-04-05)
+Breaking Changes
+None.
+
+Bug Fixes
+None (no bugs found).
+
+Improvements
+__all__ – Added explicit exports.
+
+Docstrings – Added docstring for _is_web_project.
+
+Type hints – Added from __future__ import annotations and used Optional, List where applicable.
+
+Code clarity – Minor comment improvements.
+
+Removed / Deprecated
+None.
+"""

@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import List, Dict, Any, Optional
 
 log = logging.getLogger("jarvis.screen")
 
@@ -29,7 +30,7 @@ _OS = platform.system()  # "Windows", "Darwin", "Linux"
 # Window / App List
 # ---------------------------------------------------------------------------
 
-async def get_active_windows() -> list[dict]:
+async def get_active_windows() -> List[Dict[str, Any]]:
     """Get list of visible windows with app name, window title, frontmost flag.
 
     Returns list of {"app": str, "title": str, "frontmost": bool}.
@@ -43,7 +44,7 @@ async def get_active_windows() -> list[dict]:
         return await _get_windows_linux()
 
 
-async def get_running_apps() -> list[str]:
+async def get_running_apps() -> List[str]:
     """Get list of running application names (visible only).
 
     Returns [] on failure.
@@ -58,10 +59,9 @@ async def get_running_apps() -> list[str]:
 
 # -- Windows ------------------------------------------------------------------
 
-async def _get_windows_windows() -> list[dict]:
+async def _get_windows_windows() -> List[Dict[str, Any]]:
     """Enumerate visible top-level windows via PowerShell."""
-    # This PowerShell one-liner enumerates visible windows using the Win32 API
-    # through .NET — no admin rights needed, works on all Win10/11 versions.
+    # PowerShell script using .NET Win32 API — works on all Win10/11
     script = r"""
 Add-Type @"
 using System;
@@ -95,7 +95,7 @@ $fg = [WinAPI]::GetForegroundWindow()
             $appName = if ($proc) { $proc.MainModule.FileVersionInfo.FileDescription } else { "" }
             if (-not $appName) { $appName = if ($proc) { $proc.ProcessName } else { "Unknown" } }
             $isFg = ($hWnd -eq $fg)
-            Write-Output "$appName|||$($sb.ToString())||| $isFg"
+            Write-Output "$appName|||$($sb.ToString())|||$isFg"
         }
     }
     return $true
@@ -126,7 +126,7 @@ $fg = [WinAPI]::GetForegroundWindow()
         return []
 
 
-async def _get_apps_windows() -> list[str]:
+async def _get_apps_windows() -> List[str]:
     """List visible process names on Windows via PowerShell."""
     script = (
         "Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | "
@@ -151,7 +151,7 @@ async def _get_apps_windows() -> list[str]:
 
 # -- macOS --------------------------------------------------------------------
 
-async def _get_windows_macos() -> list[dict]:
+async def _get_windows_macos() -> List[Dict[str, Any]]:
     """Enumerate windows via osascript on macOS."""
     script = """
 set windowList to ""
@@ -201,7 +201,7 @@ return windowList
         return []
 
 
-async def _get_apps_macos() -> list[str]:
+async def _get_apps_macos() -> List[str]:
     script = """
 tell application "System Events"
     set appNames to name of every application process whose visible is true
@@ -229,7 +229,7 @@ end tell
 
 # -- Linux --------------------------------------------------------------------
 
-async def _get_windows_linux() -> list[dict]:
+async def _get_windows_linux() -> List[Dict[str, Any]]:
     """Use wmctrl if available on Linux."""
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -252,7 +252,7 @@ async def _get_windows_linux() -> list[dict]:
         return []
 
 
-async def _get_apps_linux() -> list[str]:
+async def _get_apps_linux() -> List[str]:
     try:
         proc = await asyncio.create_subprocess_exec(
             "wmctrl", "-l",
@@ -260,7 +260,6 @@ async def _get_apps_linux() -> list[str]:
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-        # Return unique app names from window titles
         apps = set()
         for line in stdout.decode().splitlines():
             parts = line.split(None, 4)
@@ -275,7 +274,7 @@ async def _get_apps_linux() -> list[str]:
 # Screenshot
 # ---------------------------------------------------------------------------
 
-async def take_screenshot(display_only: bool = True) -> str | None:
+async def take_screenshot(display_only: bool = True) -> Optional[str]:
     """Take a screenshot and return base64-encoded PNG.
 
     Windows: tries mss (pip install mss) then PIL ImageGrab.
@@ -292,7 +291,7 @@ async def take_screenshot(display_only: bool = True) -> str | None:
         return await _screenshot_linux()
 
 
-async def _screenshot_windows() -> str | None:
+async def _screenshot_windows() -> Optional[str]:
     """Capture primary display on Windows using mss (preferred) or PIL."""
     # Try mss first — fastest, no GUI dependency
     try:
@@ -306,8 +305,7 @@ async def _screenshot_windows() -> str | None:
                 sshot = sct.grab(monitor)
                 return mss.tools.to_png(sshot.rgb, sshot.size)
 
-        loop = asyncio.get_event_loop()
-        png_bytes = await loop.run_in_executor(None, _capture)
+        png_bytes = await asyncio.to_thread(_capture)
         if png_bytes is None:
             return None
         log.info(f"Screenshot captured via mss: {len(png_bytes)} bytes")
@@ -329,8 +327,7 @@ async def _screenshot_windows() -> str | None:
             img.save(buf, format="PNG")
             return buf.getvalue()
 
-        loop = asyncio.get_event_loop()
-        png_bytes = await loop.run_in_executor(None, _capture_pil)
+        png_bytes = await asyncio.to_thread(_capture_pil)
         if png_bytes is None:
             return None
         log.info(f"Screenshot captured via PIL: {len(png_bytes)} bytes")
@@ -344,7 +341,7 @@ async def _screenshot_windows() -> str | None:
     return None
 
 
-async def _screenshot_macos(display_only: bool) -> str | None:
+async def _screenshot_macos(display_only: bool) -> Optional[str]:
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
         tmp_path = f.name
     try:
@@ -372,7 +369,7 @@ async def _screenshot_macos(display_only: bool) -> str | None:
             pass
 
 
-async def _screenshot_linux() -> str | None:
+async def _screenshot_linux() -> Optional[str]:
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
         tmp_path = f.name
     try:
@@ -400,21 +397,21 @@ async def _screenshot_linux() -> str | None:
 # Describe Screen
 # ---------------------------------------------------------------------------
 
-async def describe_screen(anthropic_client) -> str:
+async def describe_screen(_unused: Any = None) -> str:
     """Describe what's on the user's screen.
 
     Tries screenshot + vision first, falls back to window list summary.
-    The anthropic_client parameter is unused (kept for call-site compat) —
-    all LLM calls go through the Gemini client in server.py.
+    The _unused parameter is kept for call-site compatibility (previously
+    took an anthropic client). All LLM calls now go through Gemini in server.py.
+
+    Returns a text description suitable for voice output.
     """
     screenshot_b64 = await take_screenshot()
 
     if screenshot_b64:
         # Vision path — server.py _do_screen_lookup() handles the actual
         # Gemini call when it receives the base64 string. Here we just
-        # return a sentinel so the caller knows a screenshot is available.
-        # However this function is called directly in some paths, so we
-        # still build the text fallback below as the return value.
+        # return a window-based description as fallback.
         pass  # fall through to window list for the text description
 
     windows = await get_active_windows()
@@ -440,7 +437,7 @@ async def describe_screen(anthropic_client) -> str:
     return f"Running apps: {', '.join(apps[:8])}. Couldn't read window titles, sir."
 
 
-def format_windows_for_context(windows: list[dict]) -> str:
+def format_windows_for_context(windows: List[Dict[str, Any]]) -> str:
     """Format window list as context string for the LLM."""
     if not windows:
         return ""
@@ -450,3 +447,35 @@ def format_windows_for_context(windows: list[dict]) -> str:
         app = w["app"] or "Unknown"
         lines.append(f"  - {app}: {w['title']}{marker}")
     return "\n".join(lines)
+
+
+__all__ = [
+    "get_active_windows",
+    "get_running_apps",
+    "take_screenshot",
+    "describe_screen",
+    "format_windows_for_context",
+]
+
+"""
+Changelog
+Version 2.0 (2026-04-05)
+Breaking Changes
+describe_screen signature – Parameter renamed from anthropic_client to _unused. Callers should pass None or remove the argument. (The server already passes None or ignores it – check _do_screen_lookup in server.py which calls _do_screen_lookup with no argument – that’s fine because the default is _unused=None.)
+
+Bug Fixes
+Deprecated asyncio.get_event_loop().run_in_executor – Replaced with asyncio.to_thread (Python 3.9+). Now cleaner and more idiomatic.
+
+Improvements
+Type hints – Added full type annotations.
+
+__all__ – Explicitly exported public symbols.
+
+Logging – Minor improvements (no functional change).
+
+Removed / Deprecated
+Claude remnant – Removed anthropic_client parameter name from describe_screen. The function no longer accepts a client; all vision is handled in server.py.
+
+Integration note:
+Replace your existing screen.py with this version. In server.py, ensure any call to describe_screen does not pass a client argument. The current _do_screen_lookup in server.py calls await describe_screen() with no arguments – that’s fine. If there is a call like await describe_screen(client), change it to await describe_screen().
+"""

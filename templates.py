@@ -1,9 +1,13 @@
 """
-JARVIS Prompt Templates — Structured prompts for Claude Code tasks.
+JARVIS Prompt Templates — Structured prompts for agent tasks.
 
 Each template is a format string with named placeholders.
 Templates are matched by task type and optionally by keyword analysis.
 """
+
+from __future__ import annotations
+
+from typing import Optional
 
 TEMPLATES = {
     "landing_page": {
@@ -207,7 +211,7 @@ Build an API for {project_name}.
 }
 
 
-def get_template(task_type: str, request_text: str) -> str | None:
+def get_template(task_type: str, request_text: str) -> Optional[str]:
     """Find the best matching template for a task type and request.
 
     Returns the template format string or None if no good match.
@@ -236,3 +240,26 @@ def get_template(task_type: str, request_text: str) -> str | None:
             return config["template"]
 
     return None
+
+
+__all__ = ["TEMPLATES", "get_template"]
+
+"""
+Changelog
+Version 2.0 (2026-04-05)
+Breaking Changes
+None.
+
+Bug Fixes
+None.
+
+Improvements
+Docstring – Changed “Claude Code” to “agent tasks”.
+
+__all__ – Added explicit exports.
+
+Type hints – Added Optional[str] return type.
+
+Removed / Deprecated
+None.
+"""
