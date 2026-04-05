@@ -2686,7 +2686,7 @@ async def voice_handler(ws: WebSocket):
                 # Note: extract_memories in memory.py will need its own Gemini update separately
                 if gemini_enabled and len(user_text) > 15:
                     try:
-                        asyncio.create_task(extract_memories(user_text, response_text, None))
+                        asyncio.create_task(extract_memories(user_text, response_text))
                     except Exception:
                         pass
 
