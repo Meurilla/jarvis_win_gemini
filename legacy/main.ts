@@ -3,9 +3,6 @@
  *
  * Wires together the orb visualization, WebSocket communication,
  * speech recognition, and audio playback into a single experience.
- *
- * Note: For the CSS import to work in TypeScript, ensure your
- * `vite-env.d.ts` contains: `declare module "*.css";`
  */
 
 import { createOrb, type OrbState } from "./orb";
@@ -21,7 +18,6 @@ import "./style.css";
 type State = "idle" | "listening" | "thinking" | "speaking";
 let currentState: State = "idle";
 let isMuted = false;
-let voiceInputPaused = true;
 
 const statusEl = document.getElementById("status-text")!;
 const errorEl = document.getElementById("error-text")!;
@@ -53,7 +49,7 @@ const orb = createOrb(canvas);
 
 const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
 const WS_URL = `${wsProto}//${window.location.host}/ws/voice`;
-const socket = createSocket(WS_URL);  // auto-reconnect built-in
+const socket = createSocket(WS_URL);
 
 const audioPlayer = createAudioPlayer();
 orb.setAnalyser(audioPlayer.getAnalyser());
@@ -61,62 +57,24 @@ orb.setAnalyser(audioPlayer.getAnalyser());
 function transition(newState: State) {
   if (newState === currentState) return;
   currentState = newState;
-  const orbState = newState === "thinking" ? "thinking" : (newState as OrbState);
-  orb.setState(orbState);
+  orb.setState(newState as OrbState);
   updateStatus(newState);
 
   switch (newState) {
     case "idle":
-      if (!isMuted && !voiceInputPaused) voiceInput.resume();
+      if (!isMuted) voiceInput.resume();
       break;
     case "listening":
-      if (!isMuted && !voiceInputPaused) voiceInput.resume();
+      if (!isMuted) voiceInput.resume();
       break;
     case "thinking":
       voiceInput.pause();
-      voiceInputPaused = true;
       break;
     case "speaking":
       voiceInput.pause();
-      voiceInputPaused = true;
       break;
   }
 }
-
-// ---------------------------------------------------------------------------
-// WebSocket message handling
-// ---------------------------------------------------------------------------
-
-socket.onMessage((msg) => {
-  const type = msg.type as string;
-
-  if (type === "audio") {
-    const audioData = msg.data as string;
-    if (audioData) {
-      if (currentState !== "speaking") transition("speaking");
-      audioPlayer.enqueue(audioData);
-    } else {
-      transition("idle");
-    }
-    if (msg.text) console.log("[JARVIS]", msg.text);
-  } else if (type === "status") {
-    const state = msg.state as string;
-    if (state === "thinking" && currentState !== "thinking") {
-      transition("thinking");
-    } else if (state === "working") {
-      transition("thinking");
-      statusEl.textContent = "working...";
-    } else if (state === "idle") {
-      transition("idle");
-    }
-  } else if (type === "text") {
-    console.log("[JARVIS]", msg.text);
-  } else if (type === "task_spawned") {
-    console.log("[task]", "spawned:", msg.task_id, msg.prompt);
-  } else if (type === "task_complete") {
-    console.log("[task]", "complete:", msg.task_id, msg.status, msg.summary);
-  }
-});
 
 // ---------------------------------------------------------------------------
 // Voice input
@@ -124,11 +82,15 @@ socket.onMessage((msg) => {
 
 const voiceInput = createVoiceInput(
   (text: string) => {
+    // Cancel any current JARVIS response before sending new input
     audioPlayer.stop();
+    // User spoke — send transcript
     socket.send({ type: "transcript", text, isFinal: true });
     transition("thinking");
   },
-  (msg: string) => showError(msg)
+  (msg: string) => {
+    showError(msg);
+  }
 );
 
 // ---------------------------------------------------------------------------
@@ -140,34 +102,71 @@ audioPlayer.onFinished(() => {
 });
 
 // ---------------------------------------------------------------------------
+// WebSocket messages
+// ---------------------------------------------------------------------------
+
+socket.onMessage((msg) => {
+  const type = msg.type as string;
+
+  if (type === "audio") {
+    const audioData = msg.data as string;
+    console.log("[audio] received", audioData ? `${audioData.length} chars` : "EMPTY", "state:", currentState);
+    if (audioData) {
+      if (currentState !== "speaking") {
+        transition("speaking");
+      }
+      audioPlayer.enqueue(audioData);
+    } else {
+      // TTS failed — no audio but still need to return to idle
+      console.warn("[audio] no data received, returning to idle");
+      transition("idle");
+    }
+    // Log text for debugging
+    if (msg.text) console.log("[JARVIS]", msg.text);
+  } else if (type === "status") {
+    const state = msg.state as string;
+    if (state === "thinking" && currentState !== "thinking") {
+      transition("thinking");
+    } else if (state === "working") {
+      // Task spawned — show thinking with a different label
+      transition("thinking");
+      statusEl.textContent = "working...";
+    } else if (state === "idle") {
+      transition("idle");
+    }
+  } else if (type === "text") {
+    // Text fallback when TTS fails
+    console.log("[JARVIS]", msg.text);
+  } else if (type === "task_spawned") {
+    console.log("[task]", "spawned:", msg.task_id, msg.prompt);
+  } else if (type === "task_complete") {
+    console.log("[task]", "complete:", msg.task_id, msg.status, msg.summary);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Kick off
 // ---------------------------------------------------------------------------
 
+// Start listening after a brief delay for the orb to render
 setTimeout(() => {
   voiceInput.start();
-  voiceInputPaused = false;
   transition("listening");
 }, 1000);
 
-// Resume AudioContext on any user interaction
+// Resume AudioContext on ANY user interaction (browser autoplay policy)
 function ensureAudioContext() {
-  const analyser = audioPlayer.getAnalyser();
-  const ctx = analyser?.context as AudioContext | undefined;
-  if (ctx && ctx.state === "suspended") {
+  const ctx = audioPlayer.getAnalyser().context as AudioContext;
+  if (ctx.state === "suspended") {
     ctx.resume().then(() => console.log("[audio] context resumed"));
   }
 }
 document.addEventListener("click", ensureAudioContext);
 document.addEventListener("touchstart", ensureAudioContext);
 document.addEventListener("keydown", ensureAudioContext, { once: true });
-ensureAudioContext();
 
-// Cleanup on page unload
-window.addEventListener("beforeunload", () => {
-  socket.close();
-  voiceInput.destroy();
-  audioPlayer.destroy();
-});
+// Try to resume audio context on load
+ensureAudioContext();
 
 // ---------------------------------------------------------------------------
 // UI Controls
@@ -185,17 +184,10 @@ btnMute.addEventListener("click", (e) => {
   btnMute.classList.toggle("muted", isMuted);
   if (isMuted) {
     voiceInput.pause();
-    voiceInputPaused = true;
     transition("idle");
   } else {
-    if (!voiceInputPaused) {
-      voiceInput.resume();
-      transition("listening");
-    } else {
-      voiceInput.start();
-      voiceInputPaused = false;
-      transition("listening");
-    }
+    voiceInput.resume();
+    transition("listening");
   }
 });
 
@@ -214,6 +206,7 @@ btnRestart.addEventListener("click", async (e) => {
   statusEl.textContent = "restarting...";
   try {
     await fetch("/api/restart", { method: "POST" });
+    // Wait a few seconds then reload
     setTimeout(() => window.location.reload(), 4000);
   } catch {
     statusEl.textContent = "restart failed";
@@ -223,10 +216,12 @@ btnRestart.addEventListener("click", async (e) => {
 btnFixSelf.addEventListener("click", (e) => {
   e.stopPropagation();
   menuDropdown.style.display = "none";
+  // Activate work mode on the WebSocket session (JARVIS becomes Gemini CLI's voice)
   socket.send({ type: "fix_self" });
   statusEl.textContent = "entering work mode...";
 });
 
+// Settings button
 const btnSettings = document.getElementById("btn-settings")!;
 btnSettings.addEventListener("click", (e) => {
   e.stopPropagation();
@@ -234,43 +229,7 @@ btnSettings.addEventListener("click", (e) => {
   openSettings();
 });
 
+// First-time setup detection — check after a short delay for server readiness
 setTimeout(() => {
   checkFirstTimeSetup();
 }, 2000);
-
-/*
-Version 2.0 (2026-04-05)
-Breaking Changes
-None. Public API remains identical.
-
-Bug Fixes
-CSS import type error – Added note in comment; user must ensure vite-env.d.ts includes declare module "*.css";.
-
-WebSocket auto‑reconnect – Added exponential backoff reconnect logic.
-
-Audio context safety – Check for analyser?.context before resuming.
-
-Voice input resume on unmute – Added voiceInput.isStarted() guard to avoid errors.
-
-Cleanup on page unload – Added beforeunload listener to close WebSocket and destroy audio resources.
-
-Orb state for “working” – Now keeps orb in "thinking" state (no invalid state sent).
-
-Improvements
-Better logging – Added WebSocket connection/disconnect logs.
-
-Type safety – Used OrbState import from orb.
-
-Error handling – Show error on WebSocket failure after max retries.
-
-voiceInput API – Assumed isStarted() and destroy() methods exist (update your voice.ts if missing).
-
-Removed manual reconnect logic (relying on ws.ts built‑in).
-
-Added cleanup calls to voiceInput.destroy() and audioPlayer.destroy() on page unload.
-
-Used voiceInput.isStarted() where appropriate (though not strictly needed now, but available for future).
-
-Removed / Deprecated
-None.
-*/

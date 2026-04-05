@@ -1,5 +1,7 @@
 /**
  * Voice input (Web Speech API) and audio output (AudioContext) for JARVIS.
+ *
+ * Windows-compatible: uses standard Web APIs, no platform-specific code.
  */
 
 // ---------------------------------------------------------------------------
@@ -11,6 +13,8 @@ export interface VoiceInput {
   stop(): void;
   pause(): void;
   resume(): void;
+  isStarted(): boolean;   // Returns true if listening (or should be)
+  destroy(): void;        // Clean up resources
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -24,7 +28,14 @@ export function createVoiceInput(
   const SR = (window as any).SpeechRecognition || (typeof webkitSpeechRecognition !== "undefined" ? webkitSpeechRecognition : null);
   if (!SR) {
     onError("Speech recognition not supported in this browser");
-    return { start() {}, stop() {}, pause() {}, resume() {} };
+    return {
+      start() {},
+      stop() {},
+      pause() {},
+      resume() {},
+      isStarted() { return false; },
+      destroy() {},
+    };
   }
 
   const recognition = new SR();
@@ -34,6 +45,7 @@ export function createVoiceInput(
 
   let shouldListen = false;
   let paused = false;
+  let started = false;
 
   recognition.onresult = (event: any) => {
     for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -45,9 +57,11 @@ export function createVoiceInput(
   };
 
   recognition.onend = () => {
+    started = false;
     if (shouldListen && !paused) {
       try {
         recognition.start();
+        started = true;
       } catch {
         // Already started
       }
@@ -58,6 +72,7 @@ export function createVoiceInput(
     if (event.error === "not-allowed") {
       onError("Microphone access denied. Please allow microphone access.");
       shouldListen = false;
+      started = false;
     } else if (event.error === "no-speech") {
       // Normal, just restart
     } else if (event.error === "aborted") {
@@ -71,30 +86,56 @@ export function createVoiceInput(
     start() {
       shouldListen = true;
       paused = false;
-      try {
-        recognition.start();
-      } catch {
-        // Already started
+      if (!started) {
+        try {
+          recognition.start();
+          started = true;
+        } catch (e) {
+          console.warn("[voice] start failed:", e);
+        }
       }
     },
     stop() {
       shouldListen = false;
       paused = false;
-      recognition.stop();
+      started = false;
+      try {
+        recognition.stop();
+      } catch {
+        // Already stopped
+      }
     },
     pause() {
       paused = true;
-      recognition.stop();
+      started = false;
+      try {
+        recognition.stop();
+      } catch {
+        // Already stopped
+      }
     },
     resume() {
       paused = false;
-      if (shouldListen) {
+      if (shouldListen && !started) {
         try {
           recognition.start();
+          started = true;
         } catch {
           // Already started
         }
       }
+    },
+    isStarted() {
+      return started;
+    },
+    destroy() {
+      shouldListen = false;
+      paused = false;
+      started = false;
+      try {
+        recognition.stop();
+      } catch {}
+      // Remove all event listeners (no direct API, just let GC collect)
     },
   };
 }
@@ -108,6 +149,7 @@ export interface AudioPlayer {
   stop(): void;
   getAnalyser(): AnalyserNode;
   onFinished(cb: () => void): void;
+  destroy(): void;  // Close AudioContext
 }
 
 export function createAudioPlayer(): AudioPlayer {
@@ -154,6 +196,7 @@ export function createAudioPlayer(): AudioPlayer {
       }
 
       try {
+        // Decode base64 to binary string, then to Uint8Array, then to ArrayBuffer
         const binary = atob(base64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) {
@@ -189,5 +232,22 @@ export function createAudioPlayer(): AudioPlayer {
     onFinished(cb: () => void) {
       finishedCallback = cb;
     },
+
+    destroy() {
+      this.stop();
+      audioCtx.close().catch(console.warn);
+    },
   };
 }
+
+/*
+Changelog
+voice.ts – Version 2.0
+Added isStarted() method to VoiceInput interface and implementation (returns true if recognition is active).
+
+Added destroy() method to VoiceInput and AudioPlayer to clean up resources (close AudioContext, stop recognition).
+
+Improved internal state tracking (started flag) for accurate isStarted().
+
+Fixed potential memory leak by closing AudioContext on destroy.
+*/

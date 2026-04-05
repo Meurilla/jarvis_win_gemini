@@ -3,9 +3,6 @@
  *
  * Overlay panel for API keys, connection status, preferences, and system info.
  * Slides in from the right with glass-morphism styling.
- *
- * Windows-compatible: removed macOS‑specific statuses (Calendar, Mail, Notes).
- * Uses "Gemini CLI" instead of "Claude Code CLI".
  */
 
 // ---------------------------------------------------------------------------
@@ -13,16 +10,18 @@
 // ---------------------------------------------------------------------------
 
 interface StatusResponse {
-  claude_code_installed: boolean;   // Backend still uses this name; we'll relabel to Gemini CLI
-  calendar_accessible: boolean;     // Not shown on Windows
-  mail_accessible: boolean;         // Not shown
-  notes_accessible: boolean;        // Not shown
+  claude_code_installed: boolean;
+  calendar_accessible: boolean;
+  mail_accessible: boolean;
+  notes_accessible: boolean;
   memory_count: number;
   task_count: number;
   server_port: number;
   uptime_seconds: number;
   env_keys_set: {
     gemini: boolean;
+    //fish_audio: boolean;
+    //fish_voice_id: boolean;
     user_name: string;
   };
 }
@@ -33,11 +32,6 @@ interface PreferencesResponse {
   calendar_accounts: string;
 }
 
-interface TestResult {
-  valid: boolean;
-  error?: string;
-}
-
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -45,57 +39,24 @@ interface TestResult {
 let panelEl: HTMLElement | null = null;
 let isOpen = false;
 let isFirstTimeSetup = false;
-let setupStep = 0; // 0=gemini, 1=name, 2=done
+let setupStep = 0; // 0=gemini, 1=fish, 2=name, 3=done
 
 // ---------------------------------------------------------------------------
-// API helpers (with error handling)
+// API helpers
 // ---------------------------------------------------------------------------
 
-async function apiGet<T>(url: string, timeout = 10000): Promise<T> {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
-  try {
-    const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(id);
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-    }
-    return await res.json();
-  } catch (err) {
-    console.error(`[settings] GET ${url} failed:`, err);
-    throw err;
-  }
+async function apiGet<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  return res.json();
 }
 
-async function apiPost<T>(url: string, body: unknown, timeout = 10000): Promise<T> {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    clearTimeout(id);
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-    }
-    return await res.json();
-  } catch (err) {
-    console.error(`[settings] POST ${url} failed:`, err);
-    throw err;
-  }
-}
-
-function showToast(message: string, isError = false): void {
-  // Simple alert for now; can be replaced with a proper toast UI
-  if (isError) {
-    console.error(message);
-    alert(`Error: ${message}`);
-  } else {
-    console.log(message);
-  }
+async function apiPost<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
 }
 
 // ---------------------------------------------------------------------------
@@ -135,11 +96,14 @@ function buildPanelHTML(): string {
           </div>
         </section>
 
-        <!-- Connection Status (Windows-adapted) -->
+        <!-- Connection Status -->
         <section class="settings-section" id="section-status">
           <h3>Connection Status</h3>
           <div class="status-grid">
-            <div class="status-row"><span class="status-dot" id="status-gemini-cli"></span><span>Gemini CLI</span></div>
+            <div class="status-row"><span class="status-dot" id="status-claude-cli"></span><span>Claude Code CLI</span></div>
+            <div class="status-row"><span class="status-dot" id="status-calendar"></span><span>Apple Calendar</span></div>
+            <div class="status-row"><span class="status-dot" id="status-mail"></span><span>Apple Mail</span></div>
+            <div class="status-row"><span class="status-dot" id="status-notes"></span><span>Apple Notes</span></div>
             <div class="status-row"><span class="status-dot" id="status-server"></span><span>Server</span><span class="status-detail" id="status-server-detail"></span></div>
           </div>
         </section>
@@ -162,8 +126,7 @@ function buildPanelHTML(): string {
             </select>
           </div>
 
-          <!-- Calendar accounts field kept for compatibility (may be hidden on Windows) -->
-          <div class="settings-field" id="field-calendar-accounts" style="display:none">
+          <div class="settings-field">
             <label>Calendar Accounts</label>
             <textarea id="input-calendar-accounts" rows="2" placeholder="auto (or comma-separated emails)"></textarea>
           </div>
@@ -225,8 +188,10 @@ async function loadStatus() {
   try {
     const status = await apiGet<StatusResponse>("/api/settings/status");
 
-    // Gemini CLI status (relabel from claude_code_installed)
-    setDotStatus("status-gemini-cli", status.claude_code_installed ? "green" : "red");
+    setDotStatus("status-claude-cli", status.claude_code_installed ? "green" : "red");
+    setDotStatus("status-calendar", status.calendar_accessible ? "green" : "red");
+    setDotStatus("status-mail", status.mail_accessible ? "green" : "red");
+    setDotStatus("status-notes", status.notes_accessible ? "green" : "red");
     setDotStatus("status-server", "green");
 
     const serverDetail = document.getElementById("status-server-detail");
@@ -234,6 +199,7 @@ async function loadStatus() {
 
     // API key status dots
     setDotStatus("status-gemini", status.env_keys_set.gemini ? "green" : "red");
+    //setDotStatus("status-fish", status.env_keys_set.fish_audio ? "green" : "red");
 
     // System info
     const memEl = document.getElementById("sysinfo-memory");
@@ -249,7 +215,6 @@ async function loadStatus() {
   } catch (e) {
     console.error("[settings] failed to load status:", e);
     setDotStatus("status-server", "red");
-    showToast("Could not load status from server", true);
     return null;
   }
 }
@@ -265,22 +230,6 @@ async function loadPreferences() {
     if (calEl) calEl.value = prefs.calendar_accounts || "auto";
   } catch (e) {
     console.error("[settings] failed to load preferences:", e);
-    showToast("Could not load preferences", true);
-  }
-}
-
-async function savePreferences(): Promise<boolean> {
-  const user_name = (document.getElementById("input-user-name") as HTMLInputElement).value.trim();
-  const honorific = (document.getElementById("input-honorific") as HTMLSelectElement).value;
-  const calendar_accounts = (document.getElementById("input-calendar-accounts") as HTMLTextAreaElement).value.trim();
-  try {
-    await apiPost("/api/settings/preferences", { user_name, honorific, calendar_accounts });
-    await loadStatus();
-    showToast("Preferences saved");
-    return true;
-  } catch (e) {
-    showToast("Failed to save preferences", true);
-    return false;
   }
 }
 
@@ -292,53 +241,64 @@ function wireEvents() {
   // Save keys
   document.getElementById("btn-save-keys")?.addEventListener("click", async () => {
     const geminiKey = (document.getElementById("input-gemini-key") as HTMLInputElement).value.trim();
+    //const fishKey = (document.getElementById("input-fish-key") as HTMLInputElement).value.trim();
+
     if (geminiKey) {
-      try {
-        await apiPost("/api/settings/keys", { key_name: "GEMINI_API_KEY", key_value: geminiKey });
-        showToast("Gemini API key saved");
-        await loadStatus();
-      } catch (e) {
-        showToast("Failed to save Gemini key", true);
-      }
-    } else {
-      showToast("Please enter a Gemini API key", true);
+      await apiPost("/api/settings/keys", { key_name: "GEMINI_API_KEY", key_value: geminiKey });
+    }
+    // if (fishKey) {
+    //   await apiPost("/api/settings/keys", { key_name: "FISH_API_KEY", key_value: fishKey });
+    // }
+    await loadStatus();
+  });
+
+  // Save voice ID
+  document.getElementById("btn-save-voice-id")?.addEventListener("click", async () => {
+    const voiceId = (document.getElementById("input-fish-voice-id") as HTMLInputElement).value.trim();
+    if (voiceId) {
+      await apiPost("/api/settings/keys", { key_name: "FISH_VOICE_ID", key_value: voiceId });
     }
   });
 
   // Test Gemini
   document.getElementById("btn-test-gemini")?.addEventListener("click", async () => {
-    const btn = document.getElementById("btn-test-gemini") as HTMLButtonElement;
-    const originalText = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = "Testing...";
     setDotStatus("status-gemini", "yellow");
     const key = (document.getElementById("input-gemini-key") as HTMLInputElement).value.trim();
     try {
-      const result = await apiPost<TestResult>("/api/settings/test-gemini", { key_value: key || undefined });
+      const result = await apiPost<{ valid: boolean; error?: string }>("/api/settings/test-gemini", { key_value: key || undefined });
       setDotStatus("status-gemini", result.valid ? "green" : "red");
-      if (!result.valid) {
-        showToast(result.error || "Invalid Gemini API key", true);
-      } else {
-        showToast("Gemini API key is valid");
-      }
-    } catch (e) {
+    } catch {
       setDotStatus("status-gemini", "red");
-      showToast("Failed to test Gemini key", true);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = originalText;
     }
   });
 
+  // Test Fish
+  //document.getElementById("btn-test-fish")?.addEventListener("click", async () => {
+  //  setDotStatus("status-fish", "yellow");
+  //  const key = (document.getElementById("input-fish-key") as HTMLInputElement).value.trim();
+  //  try {
+  //    const result = await apiPost<{ valid: boolean; error?: string }>("/api/settings/test-fish", { key_value: key || undefined });
+  //    setDotStatus("status-fish", result.valid ? "green" : "red");
+  //  } catch {
+  //    setDotStatus("status-fish", "red");
+  //  }
+  //});
+
   // Save preferences
-  document.getElementById("btn-save-prefs")?.addEventListener("click", savePreferences);
+  document.getElementById("btn-save-prefs")?.addEventListener("click", async () => {
+    const user_name = (document.getElementById("input-user-name") as HTMLInputElement).value.trim();
+    const honorific = (document.getElementById("input-honorific") as HTMLSelectElement).value;
+    const calendar_accounts = (document.getElementById("input-calendar-accounts") as HTMLTextAreaElement).value.trim();
+    await apiPost("/api/settings/preferences", { user_name, honorific, calendar_accounts });
+    await loadStatus();
+  });
 
   // Setup next button
   document.getElementById("btn-setup-next")?.addEventListener("click", advanceSetup);
 }
 
 // ---------------------------------------------------------------------------
-// First-time setup wizard (simplified for Windows)
+// First-time setup wizard
 // ---------------------------------------------------------------------------
 
 function enterSetupMode() {
@@ -351,66 +311,51 @@ function enterSetupMode() {
   const nav = document.getElementById("setup-nav");
   if (nav) nav.style.display = "flex";
 
-  // Hide calendar accounts field (not needed on Windows)
-  const calendarField = document.getElementById("field-calendar-accounts");
-  if (calendarField) calendarField.style.display = "none";
-
+  // Hide sections except API keys
   showSetupStep(0);
 }
 
 function showSetupStep(step: number) {
-  // Sections: 0=API keys, 1=Preferences, 2=System info (final)
-  const sections = ["section-api-keys", "section-preferences", "section-sysinfo"];
+  const sections = ["section-api-keys", "section-status", "section-preferences", "section-sysinfo"];
   sections.forEach((id, i) => {
     const el = document.getElementById(id);
     if (!el) return;
-    if (step === i) el.style.display = "";
+    if (step === 0 && i === 0) el.style.display = "";
+    else if (step === 1 && i === 0) el.style.display = "";
+    else if (step === 2 && i === 2) el.style.display = "";
+    else if (step === 3) el.style.display = "";
     else el.style.display = "none";
   });
 
-  // Hide status section completely during setup
-  const statusSec = document.getElementById("section-status");
-  if (statusSec) statusSec.style.display = "none";
-
   const nextBtn = document.getElementById("btn-setup-next");
   if (nextBtn) {
-    if (step === 0) nextBtn.textContent = "Next: Set Your Name";
-    else if (step === 1) nextBtn.textContent = "Finish Setup";
+    if (step === 0) nextBtn.textContent = "Next: Test Keys";
+    else if (step === 1) nextBtn.textContent = "Next: Set Your Name";
+    else if (step === 2) nextBtn.textContent = "Finish Setup";
     else nextBtn.style.display = "none";
   }
 }
 
 async function advanceSetup() {
-  if (setupStep === 0) {
-    // Step 0 → 1: Ensure Gemini key is saved
-    const geminiKey = (document.getElementById("input-gemini-key") as HTMLInputElement).value.trim();
-    if (!geminiKey) {
-      showToast("Please enter a Gemini API key first", true);
-      return;
-    }
-    try {
-      await apiPost("/api/settings/keys", { key_name: "GEMINI_API_KEY", key_value: geminiKey });
-      showToast("Gemini key saved");
-      setupStep++;
-      showSetupStep(setupStep);
-    } catch {
-      showToast("Failed to save Gemini key", true);
-    }
-  } else if (setupStep === 1) {
-    // Step 1 → 2: Save preferences and close
-    await savePreferences();
-    setupStep++;
-    showSetupStep(setupStep);
-    // Close after a short delay
-    setTimeout(() => {
-      isFirstTimeSetup = false;
-      const welcome = document.getElementById("settings-welcome");
-      if (welcome) welcome.style.display = "none";
-      const nav = document.getElementById("setup-nav");
-      if (nav) nav.style.display = "none";
-      closeSettings();
-    }, 500);
+  setupStep++;
+  if (setupStep >= 3) {
+    // Done — save everything and close
+    isFirstTimeSetup = false;
+    const welcome = document.getElementById("settings-welcome");
+    if (welcome) welcome.style.display = "none";
+    const nav = document.getElementById("setup-nav");
+    if (nav) nav.style.display = "none";
+
+    // Show all sections
+    ["section-api-keys", "section-status", "section-preferences", "section-sysinfo"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = "";
+    });
+
+    closeSettings();
+    return;
   }
+  showSetupStep(setupStep);
 }
 
 // ---------------------------------------------------------------------------
@@ -427,15 +372,17 @@ export async function openSettings() {
   }
 
   panelEl.style.display = "block";
+
+  // Trigger animation
   requestAnimationFrame(() => {
     panelEl!.classList.add("open");
   });
 
-  await loadStatus();
+  // Load data
+  const status = await loadStatus();
   await loadPreferences();
 
-  // Check for first-time setup (Gemini key missing)
-  const status = await loadStatus();
+  // Check for first-time setup
   if (status && !status.env_keys_set.gemini) {
     enterSetupMode();
   }
@@ -464,40 +411,8 @@ export async function checkFirstTimeSetup(): Promise<boolean> {
       openSettings();
       return true;
     }
-  } catch (e) {
-    console.warn("[settings] Could not check first-time setup:", e);
+  } catch {
+    // Server not ready yet, skip
   }
   return false;
 }
-
-/*
-Changelog
-Version 2.0 (2026-04-05)
-Breaking Changes
-Removed Apple‑specific status rows – Calendar, Mail, Notes no longer appear in UI (they don’t work on Windows).
-
-Renamed “Claude Code CLI” to “Gemini CLI” – UI now reflects the correct agent.
-
-Bug Fixes
-API error handling – Now checks res.ok, throws on HTTP errors, shows user feedback.
-
-Test button state – Disabled while testing, shows loading text.
-
-Setup wizard – Now saves Gemini key before proceeding, and saves preferences on finish.
-
-Missing toast/alert – Added showToast for success/error messages.
-
-Improvements
-Added fetch timeout (10 seconds) using AbortController.
-
-Simplified first-time setup – Only two steps: API key → user preferences.
-
-Hidden calendar accounts field – Not relevant on Windows (can be re‑enabled if backend adds support).
-
-Better type safety – Defined TestResult interface.
-
-Removed / Deprecated
-Removed Apple Calendar, Mail, Notes status indicators.
-
-Removed commented Fish Audio code entirely (cleanup).
-*/
