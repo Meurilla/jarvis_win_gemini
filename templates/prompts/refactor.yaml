@@ -1,6 +1,6 @@
 task_type: refactor
 version: v1
-created_at: "2026-03-17"
+created_at: "2026-04-05"
 success_rate: null
 description: "Template for refactoring and code cleanup"
 
@@ -15,7 +15,7 @@ sections:
     content: |
       ## Project Context
       Working directory: {{working_dir}}
-      {{#if claude_md}}CLAUDE.md contents: {{claude_md}}{{/if}}
+      {{#if prompt_file}}JARVIS_TASK.md contents: {{prompt_file}}{{/if}}
       {{#if file_tree}}Files to refactor: {{file_tree}}{{/if}}
       {{#if current_problems}}Current problems: {{current_problems}}{{/if}}
     required: true
