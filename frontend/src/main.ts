@@ -67,18 +67,16 @@ function transition(newState: State) {
 
   switch (newState) {
     case "idle":
-      if (!isMuted && !voiceInputPaused) voiceInput.resume();
+      if (!isMuted) voiceInput.resume();
       break;
     case "listening":
-      if (!isMuted && !voiceInputPaused) voiceInput.resume();
+      if (!isMuted) voiceInput.resume();
       break;
     case "thinking":
       voiceInput.pause();
-      voiceInputPaused = true;
       break;
     case "speaking":
       voiceInput.pause();
-      voiceInputPaused = true;
       break;
   }
 }
@@ -264,12 +262,6 @@ Type safety – Used OrbState import from orb.
 Error handling – Show error on WebSocket failure after max retries.
 
 voiceInput API – Assumed isStarted() and destroy() methods exist (update your voice.ts if missing).
-
-Removed manual reconnect logic (relying on ws.ts built‑in).
-
-Added cleanup calls to voiceInput.destroy() and audioPlayer.destroy() on page unload.
-
-Used voiceInput.isStarted() where appropriate (though not strictly needed now, but available for future).
 
 Removed / Deprecated
 None.

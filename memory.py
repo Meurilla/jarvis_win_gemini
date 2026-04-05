@@ -591,14 +591,4 @@ close_all_connections() – Stub for consistency with other modules.
 
 Reminders
 FTS triggers – Not implemented. If you later add UPDATE or DELETE operations on memories/tasks/notes, you must manually update the FTS tables or add SQLite triggers.
-
-Integration note:
-Replace your existing memory.py with this version. Update any calls to extract_memories in server.py (remove the third argument). Example:
-
-python
-# Old
-await extract_memories(user_text, response_text, None)
-
-# New
-await extract_memories(user_text, response_text)
 """

@@ -1,0 +1,95 @@
+{
+  "user": {
+    "name": "sir",
+    "honorific": "sir",
+    "timezone": "UTC",
+    "locale": "en-GB"
+  },
+  "voice": {
+    "tts_provider": "edge_tts",
+    "tts_voice": "en-GB-RyanNeural",
+    "stt_language": "en-US",
+    "speech_rate": 1.0
+  },
+  "llm": {
+    "provider": "gemini",
+    "providers": {
+      "gemini": {
+        "model": "gemini-2.5-flash-lite",
+        "model_research": "gemini-2.5-flash-lite",
+        "model_fast": "gemini-2.5-flash-lite",
+        "params": {
+          "max_tokens": 600,
+          "thinking_budget": 0,
+          "research_max_tokens": 3000,
+          "research_thinking_budget": -1
+        }
+      },
+      "anthropic": {
+        "model": "claude-haiku-4-5-20251001",
+        "model_research": "claude-opus-4-6",
+        "model_fast": "claude-haiku-4-5-20251001",
+        "params": {
+          "max_tokens": 600,
+          "research_max_tokens": 3000
+        }
+      },
+      "openai": {
+        "model": "gpt-4o-mini",
+        "model_research": "gpt-4o",
+        "model_fast": "gpt-4o-mini",
+        "params": {
+          "max_tokens": 600,
+          "research_max_tokens": 3000
+        }
+      }
+    },
+    "fallback_to_env": true
+  },
+  "ui": {
+    "orb_color_idle": "#4ca8e8",
+    "orb_color_listening": "#4ca8e8",
+    "orb_color_thinking": "#6ec4ff",
+    "orb_color_speaking": "#5ab8f0",
+    "status_label_idle": "",
+    "status_label_listening": "listening...",
+    "status_label_thinking": "thinking...",
+    "status_label_speaking": "",
+    "show_jarvis_label": true,
+    "show_status_text": true
+  },
+  "integrations": {
+    "google": {
+      "enabled": false,
+      "calendar_enabled": true,
+      "mail_enabled": true,
+      "tasks_enabled": true,
+      "calendar_refresh_interval": 300,
+      "mail_refresh_interval": 120
+    },
+    "browser_automation": {
+      "enabled": true,
+      "headless": false
+    },
+    "screen_awareness": {
+      "enabled": true,
+      "refresh_interval": 30
+    },
+    "memory": {
+      "enabled": true,
+      "auto_extract": true
+    }
+  },
+  "system": {
+    "port": 8340,
+    "host": "0.0.0.0",
+    "ssl": true,
+    "log_level": "INFO",
+    "projects_dir": "",
+    "agent_cli": "gemini",
+    "max_concurrent_tasks": 3,
+    "context_refresh_interval": 30,
+    "weather_lat": null,
+    "weather_lon": null
+  }
+}

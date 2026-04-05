@@ -17,6 +17,8 @@ playwright>=1.40.0
 
 # Config / templates
 pyyaml>=6.0
+keyring>=25.0.0
+cryptography>=42.0.0
 
 # Testing
 pytest>=8.0.0

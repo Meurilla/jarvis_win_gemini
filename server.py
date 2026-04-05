@@ -18,6 +18,14 @@ import sys
 import time
 from pathlib import Path
 
+from core.secrets import get_secret
+from core.config import get_config, llm_model, active_llm
+
+"""GEMINI_API_KEY = get_secret("GEMINI_API_KEY") or ""
+cfg = get_config()
+USER_NAME = cfg.user_name()
+EDGE_TTS_VOICE = cfg.tts_voice()"""
+
 # Load .env file if present
 _env_path = Path(__file__).parent / ".env"
 if _env_path.exists():
@@ -730,15 +738,15 @@ def _to_gemini_contents(messages: list[dict]) -> list[dict]:
 async def _call_gemini(
     system: str,
     messages: list[dict],
-    model_name: str = "gemini-2.0-flash",
+    model_name: str = llm_model("fast"),
     max_tokens: int = 500,
     thinking_budget: int = 0,
 ) -> tuple[str, int, int]:
     """Call the Gemini API. Returns (text, input_tokens, output_tokens).
 
     model_name options:
-        "gemini-2.5-flash-lite"   — high-frequency calls (voice, intent, summaries)
-        "gemini-2.5-flash-lite"     — low-frequency calls (deep research, planning)
+        "llm_model("fast")"   — high-frequency calls (voice, intent, summaries)
+        "llm_model("fast")"     — low-frequency calls (deep research, planning)
 
     thinking_budget:
         0   — thinking disabled (default). Use for voice loop — fastest, no token waste.
@@ -761,7 +769,7 @@ async def _call_gemini(
             "max_output_tokens": max_tokens,
         }
 
-        # Attach ThinkingConfig explicitly for all calls so gemini-2.5-flash-lite
+        # Attach ThinkingConfig explicitly for all calls so llm_model("fast")
         # doesn't consume its default thinking budget on voice loop calls.
         # thinking_budget=0  → disable thinking (fast voice responses)
         # thinking_budget=-1 → dynamic thinking (research/planning only)
@@ -812,7 +820,7 @@ async def classify_intent(text: str) -> dict:
         raw, _, _ = await _call_gemini(
             system=system,
             messages=[{"role": "user", "content": text}],
-            model_name="gemini-2.5-flash-lite",
+            model_name=llm_model("fast"),
             max_tokens=400,
         )
         if raw.startswith("```"):
@@ -976,7 +984,7 @@ async def _execute_research(target: str, ws=None):
             report_html, inp, out = await _call_gemini(
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
-                model_name="gemini-2.5-flash-lite",
+                model_name=llm_model("fast"),
                 max_tokens=3000,
             )
             _track_usage(inp, out)
@@ -994,7 +1002,7 @@ async def _execute_research(target: str, ws=None):
             report_html, inp, out = await _call_gemini(
                 system=system,
                 messages=[{"role": "user", "content": f"Research and report on: {target}"}],
-                model_name="gemini-2.5-flash-lite",
+                model_name=llm_model("fast"),
                 max_tokens=3000,
             )
             _track_usage(inp, out)
@@ -1218,7 +1226,7 @@ async def _execute_prompt_project(project_name: str, prompt: str, work_session: 
                     msg, inp, out = await _call_gemini(
                         system=system,
                         messages=[{"role": "user", "content": f"Project: {project_name}\nAgent reported:\n{full_response[:3000]}"}],
-                        model_name="gemini-2.5-flash-lite",
+                        model_name=llm_model("fast"),
                         max_tokens=500,
                     )
                     _track_usage(inp, out)
@@ -1282,7 +1290,7 @@ async def self_work_and_notify(session: WorkSession, prompt: str, ws):
                 msg, inp, out = await _call_gemini(
                     system="You are JARVIS. Summarize what you just completed in 1 sentence. First person — 'I built', 'I set up'. No markdown.",
                     messages=[{"role": "user", "content": f"Agent completed:\n{full_response[:2000]}"}],
-                    model_name="gemini-2.5-flash-lite",
+                    model_name=llm_model("fast"),
                     max_tokens=400,
                 )
                 _track_usage(inp, out)
@@ -1418,7 +1426,7 @@ async def generate_response(
     response_text, inp, out = await _call_gemini(
         system=system,
         messages=messages,
-        model_name="gemini-2.5-flash-lite",
+        model_name=llm_model("fast"),
         max_tokens=600,  # thinking_budget=0 (default) — no thinking overhead on voice calls
     )
     _track_usage(inp, out)
@@ -2009,7 +2017,7 @@ async def _do_screen_lookup() -> str:
                 max_output_tokens=300,
             )
             response = await _gemini_client.aio.models.generate_content(
-                model="gemini-2.5-flash-lite",
+                model=llm_model("fast"),
                 contents=cast(Any, [
                     {
                         "parts": [
@@ -2131,7 +2139,7 @@ async def handle_research(text: str, target: str) -> str:
         research_text, inp, out = await _call_gemini(
             system=f"You are JARVIS, researching a topic for {USER_NAME}. Be thorough, organized, and cite sources where possible.",
             messages=[{"role": "user", "content": f"Research this thoroughly:\n\n{target}"}],
-            model_name="gemini-2.5-flash-lite",
+            model_name=llm_model("fast"),
             max_tokens=2000,
             thinking_budget=-1,
         )
@@ -2163,7 +2171,7 @@ blockquote {{ border-left: 3px solid #0ea5e9; margin-left: 0; padding-left: 16px
         summary, inp2, out2 = await _call_gemini(
             system="Summarize this research in ONE sentence for voice. No markdown.",
             messages=[{"role": "user", "content": research_text[:2000]}],
-            model_name="gemini-2.5-flash-lite",
+            model_name=llm_model("fast"),
             max_tokens=300,
         )
         _track_usage(inp2, out2)
@@ -2195,7 +2203,7 @@ Write an updated summary in 2-4 sentences capturing the key topics, decisions, a
         result, inp, out = await _call_gemini(
             system="You are a conversation summarizer. Be concise and factual.",
             messages=[{"role": "user", "content": prompt}],
-            model_name="gemini-2.5-flash-lite",
+            model_name=llm_model("fast"),
             max_tokens=500,
         )
         _track_usage(inp, out)
@@ -2454,7 +2462,7 @@ async def voice_handler(ws: WebSocket):
                                         "NEVER output [ACTION:...] tags. NEVER read out URLs. No markdown. British precision."
                                     ),
                                     messages=[{"role": "user", "content": f"Agent said:\n{full_response[:2000]}"}],
-                                    model_name="gemini-2.5-flash-lite",
+                                    model_name=llm_model("fast"),
                                     max_tokens=400,
                                 )
                                 _track_usage(inp, out)
@@ -2809,7 +2817,7 @@ async def api_test_gemini(body: KeyTest):
     try:
         client = genai.Client(api_key=key)
         response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash-lite",
+            model=llm_model("fast"),
             contents="Hi",
         )
         _ = response.text  # will raise if blocked/empty
