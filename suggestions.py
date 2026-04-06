@@ -59,6 +59,7 @@ def suggest_followup(
     Returns:
         A single Suggestion or None.
     """
+    log.debug("entered successfully")
     path = Path(working_dir)
 
     if not path.exists():
@@ -87,6 +88,7 @@ def suggest_followup(
 
 def _is_web_project(path: Path) -> bool:
     """Check if the directory looks like a web project."""
+    log.debug("entered successfully")
     try:
         entries = {e.name for e in path.iterdir() if not e.name.startswith(".")}
     except (PermissionError, OSError):
@@ -96,6 +98,7 @@ def _is_web_project(path: Path) -> bool:
 
 def _check_favicon(path: Path, task_type: str) -> Optional[Suggestion]:
     """Suggest adding a favicon if missing in web projects."""
+    log.debug("entered successfully")
     if task_type not in ("build", "feature"):
         return None
 
@@ -126,6 +129,7 @@ def _check_favicon(path: Path, task_type: str) -> Optional[Suggestion]:
 
 def _check_tests(path: Path, task_type: str) -> Optional[Suggestion]:
     """Suggest writing tests if none exist."""
+    log.debug("entered successfully")
     if task_type not in ("build", "feature", "fix"):
         return None
 
@@ -180,6 +184,7 @@ def _check_tests(path: Path, task_type: str) -> Optional[Suggestion]:
 
 def _check_readme(path: Path, task_type: str) -> Optional[Suggestion]:
     """Suggest creating a README if missing."""
+    log.debug("entered successfully")
     if task_type not in ("build", "feature"):
         return None
 
@@ -214,6 +219,7 @@ def _check_readme(path: Path, task_type: str) -> Optional[Suggestion]:
 
 def _check_quality(qa_result: Optional[QAResult]) -> Optional[Suggestion]:
     """Suggest refactoring if QA passed but noted non-critical issues."""
+    log.debug("entered successfully")
     if not qa_result or not qa_result.passed:
         return None
 

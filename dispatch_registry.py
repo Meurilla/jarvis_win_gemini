@@ -46,6 +46,7 @@ _write_counter_lock = threading.Lock()
 
 
 def _get_db() -> sqlite3.Connection:
+    log.debug("entered successfully")
     """
     Return a per-thread SQLite connection, creating it if needed.
 
@@ -67,6 +68,7 @@ def _get_db() -> sqlite3.Connection:
 
 
 def _after_write():
+    log.debug("entered successfully")
     """
     Increment write counter and checkpoint WAL periodically.
 
@@ -87,6 +89,7 @@ def _after_write():
 
 
 def close_thread_connection():
+    log.debug("entered successfully")
     """
     Close the thread-local connection. Call from thread cleanup if needed.
     Not required for the main FastAPI thread — lifespan handles that.
@@ -144,6 +147,7 @@ _SCHEMA_V2 = """
 
 
 def _migrate_db():
+    log.debug("entered successfully")
     """Apply schema migrations (e.g., rename claude_response to agent_response)."""
     conn = _get_db()
     # Check if old column exists
@@ -166,6 +170,7 @@ def _migrate_db():
 
 
 def _init_db():
+    log.debug("entered successfully")
     """Create tables and indexes if they don't exist, and run migrations."""
     conn = _get_db()
     conn.executescript(_SCHEMA_V1)  # create with old schema if needed
@@ -191,6 +196,7 @@ class DispatchRegistry:
     # -- Write operations -----------------------------------------------------
 
     def register(self, project_name: str, project_path: str, prompt: str) -> int:
+        log.debug("entered successfully")
         """Register a new dispatch. Returns the dispatch ID."""
         conn = _get_db()
         now = time.time()
@@ -220,6 +226,7 @@ class DispatchRegistry:
         response: Optional[str] = None,
         summary: Optional[str] = None,
     ):
+        log.debug("entered successfully")
         """Update dispatch status, optionally storing response and summary."""
         conn = _get_db()
         now = time.time()
@@ -262,6 +269,7 @@ class DispatchRegistry:
     # -- Read operations ------------------------------------------------------
 
     def get_most_recent(self) -> Optional[Dict[str, Any]]:
+        log.debug("entered successfully")
         """Get the most recently updated dispatch."""
         try:
             row = _get_db().execute(
@@ -273,6 +281,7 @@ class DispatchRegistry:
             return None
 
     def get_active(self) -> List[Dict[str, Any]]:
+        log.debug("entered successfully")
         """Get all pending/building dispatches."""
         try:
             rows = _get_db().execute(
@@ -286,6 +295,7 @@ class DispatchRegistry:
             return []
 
     def get_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        log.debug("entered successfully")
         """Fuzzy match the most recent dispatch by project name."""
         try:
             row = _get_db().execute(
@@ -304,6 +314,7 @@ class DispatchRegistry:
         project_name: str,
         max_age_seconds: int = DEFAULT_RECENCY_SECONDS,
     ) -> Optional[Dict[str, Any]]:
+        log.debug("entered successfully")
         """
         Return the most recent completed dispatch for a project if within max_age.
 
@@ -337,6 +348,7 @@ class DispatchRegistry:
             return None
 
     def get_all_for_project(self, project_name: str, limit: int = 10) -> List[Dict[str, Any]]:
+        log.debug("entered successfully")
         """
         Return full dispatch history for a project, newest first.
 
@@ -355,6 +367,7 @@ class DispatchRegistry:
             return []
 
     def get_recent(self, limit: int = 5) -> List[Dict[str, Any]]:
+        log.debug("entered successfully")
         """Get the last N dispatches across all projects."""
         try:
             rows = _get_db().execute(
@@ -369,6 +382,7 @@ class DispatchRegistry:
     # -- Prompt formatting ----------------------------------------------------
 
     def format_for_prompt(self) -> str:
+        log.debug("entered successfully")
         """
         Format active + recent dispatches as context for the LLM system prompt.
 

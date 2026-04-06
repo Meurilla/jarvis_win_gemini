@@ -39,6 +39,7 @@ _gemini_client = None
 
 def _get_gemini_client():
     """Lazy init of shared Gemini client."""
+    log.debug("entered successfully")
     global _gemini_client
     if _gemini_client is None and _GEMINI_API_KEY:
         _gemini_client = genai.Client(api_key=_GEMINI_API_KEY)
@@ -49,6 +50,7 @@ DB_PATH = Path(__file__).parent / "data" / "jarvis.db"
 
 def _get_db() -> sqlite3.Connection:
     """Get a new database connection. Caller must close it."""
+    log.debug("entered successfully")
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
@@ -59,6 +61,7 @@ def _get_db() -> sqlite3.Connection:
 
 def init_db():
     """Create tables if they don't exist."""
+    log.debug("entered successfully")
     conn = _get_db()
     try:
         conn.executescript("""
@@ -125,6 +128,7 @@ def init_db():
 
 def remember(content: str, mem_type: str = "fact", source: str = "", importance: int = 5) -> int:
     """Store a memory. Returns the memory ID."""
+    log.debug("entered successfully")
     conn = _get_db()
     try:
         cur = conn.execute(
@@ -151,6 +155,7 @@ def remember(content: str, mem_type: str = "fact", source: str = "", importance:
 
 def _sanitize_fts_query(query: str) -> str:
     """Clean a query string for FTS5 — remove special characters that break it."""
+    log.debug("entered successfully")
     # Remove apostrophes and quotes, keep hyphens as they are part of words
     cleaned = query.replace("'", "").replace('"', "").replace("*", "")
     # Take meaningful words only (length > 2)
@@ -163,6 +168,7 @@ def _sanitize_fts_query(query: str) -> str:
 
 def recall(query: str, limit: int = 5) -> List[Dict[str, Any]]:
     """Search memories by relevance. Returns most relevant matches."""
+    log.debug("entered successfully")
     fts_query = _sanitize_fts_query(query)
     if not fts_query:
         return []
@@ -194,6 +200,7 @@ def recall(query: str, limit: int = 5) -> List[Dict[str, Any]]:
 
 def get_recent_memories(limit: int = 10) -> List[Dict[str, Any]]:
     """Get most recent memories."""
+    log.debug("entered successfully")
     conn = _get_db()
     try:
         results = conn.execute(
@@ -206,6 +213,7 @@ def get_recent_memories(limit: int = 10) -> List[Dict[str, Any]]:
 
 def get_important_memories(limit: int = 10) -> List[Dict[str, Any]]:
     """Get highest importance memories."""
+    log.debug("entered successfully")
     conn = _get_db()
     try:
         results = conn.execute(
@@ -224,6 +232,7 @@ def create_task(title: str, description: str = "", priority: str = "medium",
                 due_date: str = "", due_time: str = "", project: str = "",
                 tags: Optional[List[str]] = None) -> int:
     """Create a task. Returns task ID."""
+    log.debug("entered successfully")
     conn = _get_db()
     try:
         cur = conn.execute(
@@ -251,6 +260,7 @@ def create_task(title: str, description: str = "", priority: str = "medium",
 
 def get_open_tasks(project: Optional[str] = None) -> List[Dict[str, Any]]:
     """Get all open/in-progress tasks, optionally filtered by project."""
+    log.debug("entered successfully")
     conn = _get_db()
     try:
         if project:
@@ -271,6 +281,7 @@ def get_open_tasks(project: Optional[str] = None) -> List[Dict[str, Any]]:
 
 def get_tasks_for_date(date_str: str) -> List[Dict[str, Any]]:
     """Get tasks due on a specific date (YYYY-MM-DD)."""
+    log.debug("entered successfully")
     conn = _get_db()
     try:
         results = conn.execute(
@@ -285,6 +296,7 @@ def get_tasks_for_date(date_str: str) -> List[Dict[str, Any]]:
 
 def complete_task(task_id: int):
     """Mark a task as done."""
+    log.debug("entered successfully")
     conn = _get_db()
     try:
         conn.execute(
@@ -302,6 +314,7 @@ def complete_task(task_id: int):
 
 def search_tasks(query: str, limit: int = 10) -> List[Dict[str, Any]]:
     """Search tasks by text."""
+    log.debug("entered successfully")
     fts_query = _sanitize_fts_query(query)
     if not fts_query:
         return []
@@ -327,6 +340,7 @@ def search_tasks(query: str, limit: int = 10) -> List[Dict[str, Any]]:
 
 def create_note(content: str, title: str = "", topic: str = "", tags: Optional[List[str]] = None) -> int:
     """Create a note. Returns note ID."""
+    log.debug("entered successfully")
     conn = _get_db()
     try:
         now = time.time()
@@ -353,6 +367,7 @@ def create_note(content: str, title: str = "", topic: str = "", tags: Optional[L
 
 def search_notes(query: str, limit: int = 10) -> List[Dict[str, Any]]:
     """Search notes by text."""
+    log.debug("entered successfully")
     fts_query = _sanitize_fts_query(query)
     if not fts_query:
         return []
@@ -374,6 +389,7 @@ def search_notes(query: str, limit: int = 10) -> List[Dict[str, Any]]:
 
 def get_notes_by_topic(topic: str) -> List[Dict[str, Any]]:
     """Get all notes for a topic/project."""
+    log.debug("entered successfully")
     conn = _get_db()
     try:
         results = conn.execute(
@@ -395,6 +411,7 @@ def build_memory_context(user_message: str) -> str:
     Searches for relevant memories based on what the user is talking about.
     Fast — runs FTS queries, no heavy computation.
     """
+    log.debug("entered successfully")
     parts = []
 
     # Always include: open high-priority tasks
@@ -428,6 +445,7 @@ def build_memory_context(user_message: str) -> str:
 
 def format_tasks_for_voice(tasks: List[Dict[str, Any]]) -> str:
     """Format tasks for voice response."""
+    log.debug("entered successfully")
     if not tasks:
         return "No tasks on the list, sir."
     count = len(tasks)
@@ -448,6 +466,7 @@ def format_tasks_for_voice(tasks: List[Dict[str, Any]]) -> str:
 
 def format_plan_for_voice(tasks: List[Dict[str, Any]], events: List[Dict[str, Any]]) -> str:
     """Format a day plan combining tasks and calendar events."""
+    log.debug("entered successfully")
     if not tasks and not events:
         return "Your day looks clear, sir. No events or tasks scheduled."
 
@@ -484,6 +503,7 @@ async def extract_memories(user_text: str, jarvis_response: str) -> List[str]:
     Uses Gemini Flash to decide if anything in the exchange is worth storing.
     Returns list of memory strings stored.
     """
+    log.debug("entered successfully")
     if len(user_text) < 15:
         return []
 
@@ -532,9 +552,9 @@ async def extract_memories(user_text: str, jarvis_response: str) -> List[str]:
 
     return []
 
-
 def close_all_connections():
     """Close any lingering connections (for shutdown)."""
+    log.debug("entered successfully")
     # sqlite3 connections are closed per call, nothing global to close.
     # This function exists for API consistency.
     pass

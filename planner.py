@@ -44,7 +44,7 @@ except ImportError:
 log = logging.getLogger("jarvis.planner")
 
 # Gemini model for planning (lightweight)
-GEMINI_MODEL = "gemini-2.5-flash-lite"
+GEMINI_MODEL = "gemma-4-31b-it"
 
 # Mirror the same DESKTOP_PATH logic as server.py and actions.py
 _desktop_env = os.getenv("PROJECTS_DIR", "")
@@ -111,6 +111,7 @@ async def detect_planning_mode(
     Returns:
         PlanningDecision with needs_planning, task_type, confidence, missing_info.
     """
+    log.debug("entered successfully")
     text_lower = user_text.lower().strip()
 
     # Check for explicit bypass phrases
@@ -135,6 +136,7 @@ async def detect_planning_mode(
 
 def _quick_classify(text: str) -> str:
     """Fast keyword-based task type detection (no API call)."""
+    log.debug("entered successfully")
     build_words = ["build", "create", "make", "set up", "scaffold", "generate", "new"]
     fix_words = ["fix", "debug", "repair", "patch", "resolve", "broken", "error", "bug"]
     research_words = ["research", "look into", "investigate", "analyze", "compare", "find out"]
@@ -161,6 +163,7 @@ async def _classify_planning_mode_llm(
     text: str, client: genai.Client
 ) -> PlanningDecision:
     """Use Gemini Flash to classify request and identify missing info."""
+    log.debug("entered successfully")
     system = (
         "You analyze development requests to decide if they need planning.\n"
         "Respond with JSON only, no markdown fences.\n\n"
@@ -231,6 +234,7 @@ async def _classify_planning_mode_llm(
 
 def _classify_planning_mode_heuristic(text: str) -> PlanningDecision:
     """Fallback heuristic when Gemini is unavailable."""
+    log.debug("entered successfully")
     task_type = _quick_classify(text)
     word_count = len(text.split())
 
@@ -344,19 +348,23 @@ class Plan:
 
     @property
     def is_complete(self) -> bool:
+        log.debug("entered successfully")
         return self.skipped or self.current_question_index >= len(self.pending_questions)
 
     @property
     def needs_confirmation(self) -> bool:
+        log.debug("entered successfully")
         return self.is_complete and not self.confirmed
 
     def current_question(self) -> Optional[dict]:
+        log.debug("entered successfully")
         if self.current_question_index < len(self.pending_questions):
             return self.pending_questions[self.current_question_index]
         return None
 
     def to_context_dict(self) -> dict:
         """Return a clean dict for conversation.py log_plan() consumption."""
+        log.debug("entered successfully")
         return {
             "task_type": self.task_type,
             "original_request": self.original_request,
@@ -375,6 +383,7 @@ async def gather_project_context(project_path: str) -> dict:
 
     Uses asyncio.to_thread for blocking I/O.
     """
+    log.debug("entered successfully")
     path = Path(project_path)
     context = {
         "path": project_path,
@@ -393,6 +402,7 @@ async def gather_project_context(project_path: str) -> dict:
 
     # Top-level directory listing (blocking, run in thread)
     def _get_listing():
+        log.debug("entered successfully")
         try:
             return sorted([
                 entry.name + ("/" if entry.is_dir() else "")
@@ -485,6 +495,7 @@ class TaskPlanner:
 
     @property
     def is_planning(self) -> bool:
+        log.debug("entered successfully")
         return self.active_plan is not None and not self.active_plan.confirmed
 
     async def start_planning(
@@ -503,6 +514,7 @@ class TaskPlanner:
             "needs_questions": bool,
         }
         """
+        log.debug("entered successfully")
         classification = await self._classify_request(user_request, client)
         task_type = classification.get("task_type", "build")
         detected_project = classification.get("project", "")
@@ -558,6 +570,7 @@ class TaskPlanner:
             "confirmation_summary": str | None,
         }
         """
+        log.debug("entered successfully")
         plan = self.active_plan
         if not plan:
             return {
@@ -635,6 +648,7 @@ class TaskPlanner:
             "modification_question": str | None,
         }
         """
+        log.debug("entered successfully")
         plan = self.active_plan
         if not plan:
             return {
@@ -682,6 +696,7 @@ class TaskPlanner:
 
     async def get_confirmation_summary(self) -> str:
         """Generate a voice-friendly plan summary for confirmation."""
+        log.debug("entered successfully")
         plan = self.active_plan
         if not plan:
             return "No active plan."
@@ -722,6 +737,7 @@ class TaskPlanner:
 
     async def build_prompt(self) -> str:
         """Build the structured agent prompt from the finalized plan."""
+        log.debug("entered successfully")
         plan = self.active_plan
         if not plan:
             return ""
@@ -768,12 +784,14 @@ class TaskPlanner:
 
     def get_working_dir(self) -> str:
         """Get the working directory for the current plan."""
+        log.debug("entered successfully")
         if self.active_plan and self.active_plan.project_path:
             return self.active_plan.project_path
         return str(DESKTOP_PATH)
 
     def reset(self):
         """Clear the active plan."""
+        log.debug("entered successfully")
         self.active_plan = None
 
     # -- Private helpers --
@@ -782,6 +800,7 @@ class TaskPlanner:
         self, text: str, client: genai.Client
     ) -> dict:
         """Use Gemini Flash to classify request type and extract known info."""
+        log.debug("entered successfully")
         system = (
             "Classify this development request. Respond with JSON only, no markdown.\n"
             "Fields:\n"
@@ -819,6 +838,7 @@ class TaskPlanner:
 
     def _assemble_prompt(self, plan: Plan, context: dict) -> str:
         """Build a freeform prompt when no template matches."""
+        log.debug("entered successfully")
         lines = [
             "## Task",
             plan.original_request,
@@ -854,6 +874,7 @@ class TaskPlanner:
 
     def _format_context(self, context: dict) -> str:
         """Format gathered project context as a prompt section."""
+        log.debug("entered successfully")
         if not context:
             return ""
 

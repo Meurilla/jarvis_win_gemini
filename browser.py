@@ -98,6 +98,7 @@ class ResearchResult:
         return d
 
     def to_prompt_context(self, max_chars_per_page: int = 3000) -> str:
+        log.debug("entered successfully")
         """Format research data as a prompt section for the report writer."""
         parts = [f"# Research: {self.topic}\n"]
         for i, page in enumerate(self.pages, 1):
@@ -141,6 +142,7 @@ class JarvisBrowser:
 
     @staticmethod
     def _check_playwright() -> bool:
+        log.debug("entered successfully")
         """Check if Playwright is installed and browsers are available."""
         try:
             import playwright.async_api  # noqa: F401
@@ -152,6 +154,7 @@ class JarvisBrowser:
     # -- Lifecycle ------------------------------------------------------------
 
     async def _ensure_browser(self):
+        log.debug("entered successfully")
         """Launch browser if not already running. Thread-safe via lock."""
         if not self._playwright_available:
             raise RuntimeError("Playwright is not installed or browsers missing. Please run: playwright install chromium")
@@ -189,6 +192,7 @@ class JarvisBrowser:
                 raise
 
     async def close(self):
+        log.debug("entered successfully")
         """Shut down the browser. Safe to call multiple times."""
         async with self._lock:
             try:
@@ -213,12 +217,14 @@ class JarvisBrowser:
     # -- Internal helpers -----------------------------------------------------
 
     async def _new_page(self):
+        log.debug("entered successfully")
         """Open a new page in the shared browser context."""
         await self._ensure_browser()
         assert self._context is not None
         return await self._context.new_page()
 
     async def _safe_goto(self, page, url: str) -> bool:
+        log.debug("entered successfully")
         """Navigate to URL, returning True on success."""
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=TIMEOUT_MS)
@@ -229,6 +235,7 @@ class JarvisBrowser:
 
     @staticmethod
     async def _extract_text(page) -> Dict[str, str]:
+        log.debug("entered successfully")
         """Extract title and main text from the current page."""
         return await page.evaluate("""
             () => {
@@ -257,6 +264,7 @@ class JarvisBrowser:
     # -- Public API -----------------------------------------------------------
 
     async def search(self, query: str) -> List[SearchResult]:
+        log.debug("entered successfully")
         """
         Search DuckDuckGo and return top results.
 
@@ -317,6 +325,7 @@ class JarvisBrowser:
         return results
 
     async def visit(self, url: str) -> PageContent:
+        log.debug("entered successfully")
         """
         Visit a URL and extract clean main text content.
 
@@ -361,6 +370,7 @@ class JarvisBrowser:
             await page.close()
 
     async def screenshot(self, url: str, path: Optional[str] = None) -> str:
+        log.debug("entered successfully")
         """
         Take a full-page screenshot of a URL.
 
@@ -404,6 +414,7 @@ class JarvisBrowser:
             await page.close()
 
     async def research(self, topic: str, max_sources: int = 3) -> ResearchResult:
+        log.debug("entered successfully")
         """
         Multi-step research: search → visit top results → return structured data.
 

@@ -25,6 +25,7 @@ _local = threading.local()
 
 def _get_db() -> sqlite3.Connection:
     """Get thread-local database connection, creating it if needed."""
+    log.debug("entered successfully")
     if not hasattr(_local, "conn") or _local.conn is None:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
@@ -38,6 +39,7 @@ def _get_db() -> sqlite3.Connection:
 
 def close_thread_connection():
     """Close the thread-local connection if open."""
+    log.debug("entered successfully")
     if hasattr(_local, "conn") and _local.conn is not None:
         try:
             _local.conn.close()
@@ -57,6 +59,7 @@ class SuccessTracker:
 
     def _ensure_tables(self):
         """Create tables and indexes if they don't exist."""
+        log.debug("entered successfully")
         conn = _get_db()
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS task_log (
@@ -99,6 +102,7 @@ class SuccessTracker:
         duration: float = 0.0,
     ):
         """Log a completed task."""
+        log.debug("entered successfully")
         conn = _get_db()
         try:
             conn.execute(
@@ -114,6 +118,7 @@ class SuccessTracker:
 
     def log_usage(self, action_type: str, keyword: str = ""):
         """Track usage patterns — what types of requests are made most."""
+        log.debug("entered successfully")
         conn = _get_db()
         try:
             existing = conn.execute(
@@ -138,6 +143,7 @@ class SuccessTracker:
 
     def log_suggestion(self, task_id: str, suggestion: str):
         """Log a proactive suggestion."""
+        log.debug("entered successfully")
         conn = _get_db()
         try:
             conn.execute(
@@ -151,6 +157,7 @@ class SuccessTracker:
 
     def mark_suggestion_accepted(self, suggestion_id: int):
         """Mark a suggestion as accepted by the user."""
+        log.debug("entered successfully")
         conn = _get_db()
         try:
             conn.execute(
@@ -164,6 +171,7 @@ class SuccessTracker:
 
     def get_success_rate(self, task_type: Optional[str] = None) -> Dict[str, Any]:
         """Get success rate stats, optionally filtered by task type."""
+        log.debug("entered successfully")
         conn = _get_db()
         try:
             if task_type:
@@ -191,6 +199,7 @@ class SuccessTracker:
 
     def get_top_actions(self, limit: int = 10) -> List[Dict[str, Any]]:
         """Get the most common action types."""
+        log.debug("entered successfully")
         conn = _get_db()
         try:
             rows = conn.execute(
@@ -205,6 +214,7 @@ class SuccessTracker:
 
     def get_avg_duration(self, task_type: Optional[str] = None) -> float:
         """Get average task duration in seconds."""
+        log.debug("entered successfully")
         conn = _get_db()
         try:
             if task_type:
@@ -223,6 +233,7 @@ class SuccessTracker:
 
     def close(self):
         """Close the thread-local connection for the current thread."""
+        log.debug("entered successfully")
         close_thread_connection()
 
 

@@ -77,9 +77,9 @@ DEFAULTS: dict[str, Any] = {
         "provider": "gemini",             # Active provider key
         "providers": {
             "gemini": {
-                "model": "gemini-2.5-flash-lite",
-                "model_research": "gemini-2.5-flash-lite",   # used for deep research
-                "model_fast": "gemini-2.5-flash-lite",       # used for intent/summary
+                "model": "gemma-4-31b-it",
+                "model_research": "gemma-4-31b-it",   # used for deep research
+                "model_fast": "gemma-4-31b-it",       # used for intent/summary
                 "params": {
                     "max_tokens": 600,
                     "thinking_budget": 0,         # 0 = off, -1 = dynamic

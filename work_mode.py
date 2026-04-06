@@ -35,6 +35,7 @@ _gemini_client = None
 
 def _get_gemini_client() -> Optional[genai.Client]:
     """Get or create a shared Gemini client for API fallback mode."""
+    log.debug("entered successfully")
     global _gemini_client
     if _gemini_client is None and _GEMINI_API_KEY:
         _gemini_client = genai.Client(api_key=_GEMINI_API_KEY)
@@ -43,6 +44,7 @@ def _get_gemini_client() -> Optional[genai.Client]:
 
 def _resolve_agent_cli() -> Optional[str]:
     """Find the agentic CLI binary. Returns full path or None."""
+    log.debug("entered successfully")
     if _AGENT_CLI_ENV.lower() == "none":
         return None
     # Try the configured name, then common fallbacks
@@ -80,18 +82,22 @@ class WorkSession:
 
     @property
     def active(self) -> bool:
+        log.debug("entered successfully")
         return self._active
 
     @property
     def project_name(self) -> Optional[str]:
+        log.debug("entered successfully")
         return self._project_name
 
     @property
     def status(self) -> str:
+        log.debug("entered successfully")
         return self._status
 
     async def start(self, working_dir: str, project_name: Optional[str] = None):
         """Start or switch to a project session."""
+        log.debug("entered successfully")
         self._working_dir = working_dir
         # Use Path().name for Windows-safe directory name extraction
         self._project_name = project_name or Path(working_dir).name
@@ -107,6 +113,7 @@ class WorkSession:
         If a CLI tool is available: spawns a subprocess in the project directory.
         Otherwise: calls the Gemini API directly (no file access).
         """
+        log.debug("entered successfully")
         self._status = "working"
         if _AGENT_CLI_PATH:
             result = await self._send_via_cli(user_text)
@@ -118,6 +125,7 @@ class WorkSession:
 
     async def _send_via_cli(self, user_text: str) -> str:
         """Run the agentic CLI as a subprocess."""
+        log.debug("entered successfully")
         cmd = [_AGENT_CLI_PATH, "-p"]
 
         try:
@@ -152,6 +160,7 @@ class WorkSession:
 
     async def _send_via_api(self, user_text: str) -> str:
         """Fall back to direct Gemini API when no CLI is installed."""
+        log.debug("entered successfully")
         client = _get_gemini_client()
         if not client:
             return "No Gemini API key configured, sir."
@@ -199,6 +208,7 @@ class WorkSession:
 
     async def stop(self):
         """End the work session."""
+        log.debug("entered successfully")
         project = self._project_name
         self._active = False
         self._working_dir = None
@@ -210,6 +220,7 @@ class WorkSession:
 
     def _save_session(self):
         """Persist session state so it survives restarts (currently unused)."""
+        log.debug("entered successfully")
         try:
             SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
             SESSION_FILE.write_text(json.dumps({
@@ -222,6 +233,7 @@ class WorkSession:
 
     def _clear_session(self):
         """Remove persisted session."""
+        log.debug("entered successfully")
         try:
             SESSION_FILE.unlink(missing_ok=True)
         except Exception:
@@ -229,6 +241,7 @@ class WorkSession:
 
     async def restore(self) -> bool:
         """Restore session from disk after restart. Returns True if restored."""
+        log.debug("entered successfully")
         try:
             if SESSION_FILE.exists():
                 data = json.loads(SESSION_FILE.read_text())
@@ -250,6 +263,7 @@ def is_casual_question(text: str) -> bool:
     Casual questions go straight to Gemini (fast).
     Work questions go to the agentic session (powerful).
     """
+    log.debug("entered successfully")
     t = text.lower().strip()
 
     casual_patterns = [

@@ -15,6 +15,7 @@ import logging
 import os
 import shutil
 import sys
+import io
 import time
 from pathlib import Path
 
@@ -69,8 +70,33 @@ from memory import (
 from dispatch_registry import DispatchRegistry
 from planner import TaskPlanner, BYPASS_PHRASES
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
+# ---------- 1. Remove any existing configuration ----------
+logging.root.handlers.clear()
+
+# ---------- 2. Define log format ----------
+log_format = "%(asctime)s [%(name)s] %(funcName)s(): %(message)s"
+date_format = "%Y-%m-%d %H:%M:%S"
+formatter = logging.Formatter(fmt=log_format, datefmt=date_format)
+
+# ---------- 3. Create logger ----------
 log = logging.getLogger("jarvis")
+log.setLevel(logging.DEBUG)          # must be DEBUG to allow DEBUG to handlers
+log.handlers.clear()  # Clear any existing handlers to prevent duplicates in interactive environments
+
+# ---------- 4. Console handler (INFO and above) ----------
+console = logging.StreamHandler(sys.stdout)
+console.setLevel(logging.INFO)
+console.setFormatter(formatter)
+log.addHandler(console)
+
+# ---------- 5. File handler (DEBUG and above) ----------
+file_handler = logging.FileHandler("jarvis_debug.log", encoding="utf-8")
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(formatter)
+log.addHandler(file_handler)
+
+# ---------- 6. Prevent propagation to root logger (avoid duplicate logs) ----------
+log.propagate = False
 
 # ---------------------------------------------------------------------------
 # Config
@@ -262,6 +288,7 @@ _weather_fetched: bool = False
 
 async def fetch_weather() -> str:
     """Fetch current weather from wttr.in. Cached for the session."""
+    log.debug(" entered successfully")
     global _cached_weather, _weather_fetched
     if _weather_fetched:
         return _cached_weather or "Weather data unavailable."
@@ -283,7 +310,7 @@ async def fetch_weather() -> str:
 # ---------------------------------------------------------------------------
 
 @dataclass
-class GeminiTask:
+class AgentTask:
     id: str
     prompt: str
     status: str = "pending"  # pending, running, completed, failed, cancelled
@@ -318,25 +345,28 @@ class TaskRequest(BaseModel):
 # Gemini Task Manager
 # ---------------------------------------------------------------------------
 
-class GeminiTaskManager:
+class AgentTaskManager:
     """Manages background gemini -p subprocesses."""
 
     def __init__(self, max_concurrent: int = 3):
-        self._tasks: dict[str, GeminiTask] = {}
+        self._tasks: dict[str, AgentTask] = {}
         self._max_concurrent = max_concurrent
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._websockets: list[WebSocket] = []  # for push notifications
 
     def register_websocket(self, ws: WebSocket):
+        log.debug(" entered successfully")
         if ws not in self._websockets:
             self._websockets.append(ws)
 
     def unregister_websocket(self, ws: WebSocket):
+        log.debug(" entered successfully")
         if ws in self._websockets:
             self._websockets.remove(ws)
 
     async def _notify(self, message: dict):
         """Push a message to all connected WebSocket clients."""
+        log.debug(" entered successfully")
         dead = []
         for ws in self._websockets:
             try:
@@ -347,7 +377,8 @@ class GeminiTaskManager:
             self._websockets.remove(ws)
 
     async def spawn(self, prompt: str, working_dir: str = ".") -> str:
-        """Spawn a gemini -p subprocess. Returns task_id. Non-blocking."""
+        """Spawn a gemini -p subprocess. Returns task_id. Non-blocking. -- change to agent -p"""
+        log.debug(" entered successfully")
         active = await self.get_active_count()
         if active >= self._max_concurrent:
             raise RuntimeError(
@@ -356,7 +387,7 @@ class GeminiTaskManager:
             )
 
         task_id = str(uuid.uuid4())[:8]
-        task = GeminiTask(
+        task = AgentTask(
             id=task_id,
             prompt=prompt,
             working_dir=working_dir,
@@ -378,6 +409,7 @@ class GeminiTaskManager:
 
     def _generate_project_name(self, prompt: str) -> str:
         """Generate a kebab-case project folder name from the prompt."""
+        log.debug(" entered successfully")
         import re
         # Extract key words
         words = re.sub(r'[^a-zA-Z0-9\s]', '', prompt.lower()).split()
@@ -387,8 +419,9 @@ class GeminiTaskManager:
         name = "-".join(meaningful) if meaningful else "jarvis-project"
         return name
 
-    async def _run_task(self, task: GeminiTask):
+    async def _run_task(self, task: AgentTask):
         """Open a terminal window and run the agent visibly."""
+        log.debug(" entered successfully")
         task.status = "running"
         task.started_at = datetime.now()
 
@@ -509,8 +542,9 @@ class GeminiTaskManager:
         if task.status == "completed":
             asyncio.create_task(self._run_qa(task))
 
-    async def _run_qa(self, task: GeminiTask, attempt: int = 1):
+    async def _run_qa(self, task: AgentTask, attempt: int = 1):
         """Run QA verification on a completed task, auto-retry on failure."""
+        log.debug(" entered successfully")
         try:
             qa_result = await qa_agent.verify(task.prompt, task.result, task.working_dir)
             duration = task.elapsed_seconds
@@ -571,16 +605,20 @@ class GeminiTaskManager:
         except Exception as e:
             log.error(f"QA error for task {task.id}: {e}")
 
-    async def get_status(self, task_id: str) -> Optional[GeminiTask]:
+    async def get_status(self, task_id: str) -> Optional[AgentTask]:
+        log.debug(" entered successfully")
         return self._tasks.get(task_id)
 
-    async def list_tasks(self) -> list[GeminiTask]:
+    async def list_tasks(self) -> list[AgentTask]:
+        log.debug(" entered successfully")
         return list(self._tasks.values())
 
     async def get_active_count(self) -> int:
+        log.debug(" entered successfully")
         return sum(1 for t in self._tasks.values() if t.status in ("pending", "running"))
 
     async def cancel(self, task_id: str) -> bool:
+        log.debug(" entered successfully")
         task = self._tasks.get(task_id)
         if not task or task.status not in ("pending", "running"):
             return False
@@ -604,6 +642,7 @@ class GeminiTaskManager:
 
     def get_active_tasks_summary(self) -> str:
         """Format active tasks for injection into the system prompt."""
+        log.debug(" entered successfully")
         active = [t for t in self._tasks.values() if t.status in ("pending", "running")]
         completed_recent = [
             t for t in self._tasks.values()
@@ -630,6 +669,7 @@ class GeminiTaskManager:
 
 async def scan_projects() -> list[dict]:
     """Quick scan of ~/Desktop for git repos (depth 1)."""
+    log.debug(" entered successfully")
     projects = []
     desktop = DESKTOP_PATH
 
@@ -661,8 +701,8 @@ async def scan_projects() -> list[dict]:
 
     return projects
 
-
 def format_projects_for_prompt(projects: list[dict]) -> str:
+    log.debug(" entered successfully")
     if not projects:
         return "No projects found on Desktop."
     lines = []
@@ -691,9 +731,9 @@ STT_CORRECTIONS = {
     r"\bjarves\b": "JARVIS",
 }
 
-
 def apply_speech_corrections(text: str) -> str:
     """Fix common speech-to-text errors before processing."""
+    log.debug(" entered successfully")
     import re as _stt_re
     result = text
     for pattern, replacement in STT_CORRECTIONS.items():
@@ -708,7 +748,6 @@ def apply_speech_corrections(text: str) -> str:
 # Module-level client — created once in lifespan, reused for all calls.
 _gemini_client: "genai.Client | None" = None
 
-
 def _to_gemini_contents(messages: list[dict]) -> list[dict]:
     """Convert Anthropic-style messages to google.genai content format.
 
@@ -718,6 +757,7 @@ def _to_gemini_contents(messages: list[dict]) -> list[dict]:
     Gemini requires strictly alternating user/model turns, so consecutive
     messages from the same role are merged into one.
     """
+    log.debug(" entered successfully")
     converted = []
     for msg in messages:
         role = "model" if msg.get("role") == "assistant" else "user"
@@ -734,25 +774,25 @@ def _to_gemini_contents(messages: list[dict]) -> list[dict]:
 
     return converted
 
-
 async def _call_gemini(
     system: str,
     messages: list[dict],
     model_name: str = llm_model("fast"),
     max_tokens: int = 500,
-    thinking_budget: int = 0,
+    # thinking_budget: int = 0,
 ) -> tuple[str, int, int]:
     """Call the Gemini API. Returns (text, input_tokens, output_tokens).
 
     model_name options:
         "llm_model("fast")"   — high-frequency calls (voice, intent, summaries)
-        "llm_model("fast")"     — low-frequency calls (deep research, planning)
+        "llm_model("research")"     — low-frequency calls (deep research, planning)
 
     thinking_budget:
         0   — thinking disabled (default). Use for voice loop — fastest, no token waste.
         -1   — dynamic thinking (model decides how much to think). Use for research/planning.
             Maps to ThinkingConfig(thinking_budget=-1) in the SDK.
     """
+    log.debug(" entered successfully")
     client = _gemini_client
     if client is None:
         if not GEMINI_API_KEY:
@@ -773,12 +813,12 @@ async def _call_gemini(
         # doesn't consume its default thinking budget on voice loop calls.
         # thinking_budget=0  → disable thinking (fast voice responses)
         # thinking_budget=-1 → dynamic thinking (research/planning only)
-        try:
+        """try:
             config_kwargs["thinking_config"] = genai_types.ThinkingConfig(
                 thinking_budget=thinking_budget,
             )
         except AttributeError:
-            log.debug("ThinkingConfig not available in this SDK version, skipping")
+            log.debug("ThinkingConfig not available in this SDK version, skipping")"""
 
         config = genai_types.GenerateContentConfig(**config_kwargs)
         response = await client.aio.models.generate_content(
@@ -798,6 +838,7 @@ async def _call_gemini(
         return f"Apologies, sir. Language systems are unavailable: {e}", 0, 0
 
 async def classify_intent(text: str) -> dict:
+    log.debug(" entered successfully")
     """Classify every user message using Gemini Flash.
 
     Returns: {"action": "open_terminal|browse|build|chat", "target": "description"}
@@ -840,6 +881,7 @@ async def classify_intent(text: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def strip_markdown_for_tts(text: str) -> str:
+    log.debug(" entered successfully")
     """Strip ALL markdown from text before sending to TTS."""
     import re as _md_re
     result = text
@@ -890,8 +932,8 @@ def strip_markdown_for_tts(text: str) -> str:
 
 import re as _action_re
 
-
 def extract_action(response: str) -> tuple[str, dict | None]:
+    log.debug(" entered successfully")
     """Extract [ACTION:X] tag from LLM response.
 
     Returns (clean_text_for_tts, action_dict_or_none).
@@ -907,8 +949,8 @@ def extract_action(response: str) -> tuple[str, dict | None]:
         return clean_text, {"action": action_type, "target": action_target}
     return response, None
 
-
 async def _execute_build(target: str):
+    log.debug(" entered successfully")
     """Execute a build action from an LLM-embedded [ACTION:BUILD] tag."""
     try:
         await handle_build(target)
@@ -917,6 +959,7 @@ async def _execute_build(target: str):
 
 
 async def _execute_browse(target: str):
+    log.debug(" entered successfully")
     """Execute a browse action from an LLM-embedded [ACTION:BROWSE] tag."""
     try:
         if target.startswith("http") or "." in target.split()[0]:
@@ -929,6 +972,7 @@ async def _execute_browse(target: str):
 
 
 async def _execute_research(target: str, ws=None):
+    log.debug(" entered successfully")
     """
     Two-stage research pipeline:
       Stage 1 — browser.py scrapes real web content → ResearchResult
@@ -1108,8 +1152,8 @@ async def _execute_research(target: str, ws=None):
             except Exception:
                 pass
 
-
 async def _focus_terminal_window(project_name: str):
+    log.debug(" entered successfully")
     """Bring a terminal window matching the project name to front."""
     try:
         script = (
@@ -1129,16 +1173,16 @@ async def _focus_terminal_window(project_name: str):
     except Exception:
         pass
 
-
 async def _execute_open_terminal():
+    log.debug(" entered successfully")
     """Execute an open-terminal action from an LLM-embedded [ACTION:OPEN_TERMINAL] tag."""
     try:
         await handle_open_terminal()
     except Exception as e:
         log.error(f"Open terminal failed: {e}")
 
-
 def _find_project_dir(project_name: str) -> str | None:
+    log.debug(" entered successfully")
     """Find a project directory by name from cached projects or DESKTOP_PATH."""
     for p in cached_projects:
         if project_name.lower() in p.get("name", "").lower():
@@ -1152,8 +1196,8 @@ def _find_project_dir(project_name: str) -> str | None:
             pass
     return None
 
-
 async def _execute_prompt_project(project_name: str, prompt: str, work_session: WorkSession, ws, dispatch_id: int = 0, history: Optional[list[dict]] = None, voice_state: Optional[dict] = None):
+    log.debug(" entered successfully")
     """Dispatch a prompt to Gemini in a project directory.
 
     Runs entirely in the background. JARVIS returns to conversation mode
@@ -1277,8 +1321,8 @@ async def _execute_prompt_project(project_name: str, prompt: str, work_session: 
         except Exception:
             pass
 
-
 async def self_work_and_notify(session: WorkSession, prompt: str, ws):
+    log.debug(" entered successfully")
     """Run agent in background and notify via voice when done."""
     try:
         full_response = await session.send(prompt)
@@ -1319,6 +1363,7 @@ _last_greeting_time: float = 0
 # ---------------------------------------------------------------------------
 
 async def synthesize_speech(text: str) -> Optional[bytes]:
+    log.debug(" entered successfully")
     """Generate speech audio from text using edge-tts.
 
     Completely free, no API key required. Uses Microsoft Edge's neural TTS.
@@ -1365,13 +1410,14 @@ async def synthesize_speech(text: str) -> Optional[bytes]:
 
 async def generate_response(
     text: str,
-    task_mgr: GeminiTaskManager,
+    task_mgr: AgentTaskManager,
     projects: list[dict],
     conversation_history: list[dict],
     last_response: str = "",
     session_summary: str = "",
     conversation_context: str = "",
 ) -> str:
+    log.debug(" entered successfully")
     """Generate a JARVIS response using Gemini Flash."""
     now = datetime.now()
     current_time = now.strftime("%A, %B %d, %Y at %I:%M %p")
@@ -1438,7 +1484,7 @@ async def generate_response(
 # ---------------------------------------------------------------------------
 
 # Shared state
-task_manager = GeminiTaskManager(max_concurrent=3)
+task_manager = AgentTaskManager(max_concurrent=3)
 gemini_enabled: bool = False  # True once GEMINI_API_KEY is set
 cached_projects: list[dict] = []
 recently_built: list[dict] = []  # [{"name": str, "path": str, "time": float}]
@@ -1449,8 +1495,8 @@ _USAGE_FILE = Path(__file__).parent / "data" / "usage_log.jsonl"
 _session_start = time.time()
 _session_tokens = {"input": 0, "output": 0, "api_calls": 0, "tts_calls": 0}
 
-
 def _append_usage_entry(input_tokens: int, output_tokens: int, call_type: str = "api"):
+    log.debug(" entered successfully")
     """Append a usage entry with timestamp to the log file."""
     try:
         _USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -1467,8 +1513,8 @@ def _append_usage_entry(input_tokens: int, output_tokens: int, call_type: str = 
     except Exception:
         pass
 
-
 def _get_usage_for_period(seconds: float | None = None) -> dict:
+    log.debug(" entered successfully")
     """Sum usage from the log file for a time period. None = all time."""
     import json as _json
     totals = {"input_tokens": 0, "output_tokens": 0, "api_calls": 0, "tts_calls": 0}
@@ -1490,22 +1536,22 @@ def _get_usage_for_period(seconds: float | None = None) -> dict:
         pass
     return totals
 
-
 def _cost_from_tokens(input_t: int, output_t: int) -> float:
     # Gemini 2.5 Flash pricing: $0.075/$0.30 per MTok in/out
     # On the free tier (1000 req/day) this is effectively $0.00
+    log.debug(" entered successfully")
     return (input_t / 1_000_000) * 0.075 + (output_t / 1_000_000) * 0.30
 
-
 def _track_usage(inp: int, out: int):
+    log.debug(" entered successfully")
     """Track token usage from a Gemini API call (raw token counts)."""
     _session_tokens["input"] += inp
     _session_tokens["output"] += out
     _session_tokens["api_calls"] += 1
     _append_usage_entry(inp, out, "api")
 
-
 def get_usage_summary() -> str:
+    log.debug(" entered successfully")
     """Get a voice-friendly usage summary with time breakdowns."""
     uptime_min = int((time.time() - _session_start) / 60)
 
@@ -1536,8 +1582,8 @@ _ctx_cache = {
     "weather": "Weather data unavailable.",
 }
 
-
 def _refresh_context_sync():
+    log.debug(" entered successfully")
     """Run in a SEPARATE THREAD — refreshes screen/calendar/mail context.
 
     This runs completely off the async event loop so it never blocks responses.
@@ -1657,9 +1703,9 @@ $fg = [WinAPI]::GetForegroundWindow()
     t.start()
     log.info("Context refresh thread started")
 
-
 @asynccontextmanager
 async def lifespan(application: FastAPI):
+    log.debug(" entered successfully")
     global gemini_enabled, cached_projects, _gemini_client
  
     if GEMINI_API_KEY:
@@ -1684,7 +1730,7 @@ async def lifespan(application: FastAPI):
     # Shutdown — close browser cleanly
     await application.state.browser.close()
     log.info("Browser closed on shutdown")
-
+    log.debug("exited successfully")
 
 app = FastAPI(title="JARVIS Server", version="0.1.2", lifespan=lifespan)
 
@@ -1701,20 +1747,21 @@ app.add_middleware(
 
 @app.get("/api/health")
 async def health():
+    log.debug(" entered successfully")
     return {"status": "online", "name": "JARVIS", "version": "0.1.2"}
-
 
 @app.get("/api/tts-test")
 async def tts_test():
     """Generate a test audio clip for debugging."""
+    log.debug(" entered successfully")
     audio = await synthesize_speech("Testing audio, sir.")
     if audio:
         return {"audio": base64.b64encode(audio).decode()}
     return {"audio": None, "error": "TTS failed"}
 
-
 @app.get("/api/usage")
 async def api_usage():
+    log.debug(" entered successfully")
     uptime = int(time.time() - _session_start)
     today = _get_usage_for_period(86400)
     week = _get_usage_for_period(86400 * 7)
@@ -1728,32 +1775,32 @@ async def api_usage():
         "all_time": {**all_time, "cost_usd": round(_cost_from_tokens(all_time["input_tokens"], all_time["output_tokens"]), 4)},
     }
 
-
 @app.get("/api/tasks")
 async def api_list_tasks():
+    log.debug(" entered successfully")
     tasks = await task_manager.list_tasks()
     return {"tasks": [t.to_dict() for t in tasks]}
 
-
 @app.get("/api/tasks/{task_id}")
 async def api_get_task(task_id: str):
+    log.debug(" entered successfully")
     task = await task_manager.get_status(task_id)
     if not task:
         return JSONResponse(status_code=404, content={"error": "Task not found"})
     return {"task": task.to_dict()}
 
-
 @app.post("/api/tasks")
 async def api_create_task(req: TaskRequest):
+    log.debug(" entered successfully")
     try:
         task_id = await task_manager.spawn(req.prompt, req.working_dir)
         return {"task_id": task_id, "status": "spawned"}
     except RuntimeError as e:
         return JSONResponse(status_code=429, content={"error": str(e)})
 
-
 @app.delete("/api/tasks/{task_id}")
 async def api_cancel_task(task_id: str):
+    log.debug(" entered successfully")
     cancelled = await task_manager.cancel(task_id)
     if not cancelled:
         return JSONResponse(
@@ -1762,9 +1809,9 @@ async def api_cancel_task(task_id: str):
         )
     return {"task_id": task_id, "status": "cancelled"}
 
-
 @app.get("/api/projects")
 async def api_list_projects():
+    log.debug(" entered successfully")
     global cached_projects
     cached_projects = await scan_projects()
     return {"projects": cached_projects}
@@ -1773,6 +1820,7 @@ async def api_list_projects():
 # -- Fast Action Detection (no LLM call) -----------------------------------
 
 def _scan_projects_sync() -> list[dict]:
+    log.debug(" entered successfully")
     """Synchronous project scan — runs in executor."""
     projects = []
     try:
@@ -1783,8 +1831,8 @@ def _scan_projects_sync() -> list[dict]:
         pass
     return projects
 
-
 def detect_action_fast(text: str) -> dict | None:
+    log.debug(" entered successfully")
     """Keyword-based action detection — ONLY for short, obvious commands.
 
     Everything else goes to the LLM which uses [ACTION:X] tags when it decides
@@ -1865,11 +1913,13 @@ def detect_action_fast(text: str) -> dict | None:
 # -- Action Handlers -------------------------------------------------------
 
 async def handle_open_terminal() -> str:
+    log.debug(" entered successfully")
     result = await open_terminal("gemini")
     return result["confirmation"]
 
 
 async def handle_build(target: str) -> str:
+    log.debug(" entered successfully")
     name = _generate_project_name(target)
     path = str(DESKTOP_PATH / name)
     os.makedirs(path, exist_ok=True)
@@ -1887,6 +1937,7 @@ async def handle_build(target: str) -> str:
 
 
 async def handle_show_recent() -> str:
+    log.debug(" entered successfully")
     if not recently_built:
         return "Nothing built recently, sir."
     last = recently_built[-1]
@@ -1915,8 +1966,8 @@ async def handle_show_recent() -> str:
 # Track active lookups so JARVIS can report status
 _active_lookups: dict[str, dict] = {}  # id -> {"type": str, "status": str, "started": float}
 
-
 async def _lookup_and_report(lookup_type, lookup_fn, ws, history=None):
+    log.debug(" entered successfully")
     """Run a slow lookup, then speak the result back.
 
     JARVIS stays conversational — this runs completely off the main path.
@@ -1978,6 +2029,7 @@ async def _lookup_and_report(lookup_type, lookup_fn, ws, history=None):
 
 
 async def _do_calendar_lookup() -> str:
+    log.debug(" entered successfully")
     """Slow calendar fetch — runs in thread."""
     await refresh_calendar_cache()
     events = await get_todays_events()
@@ -1987,6 +2039,7 @@ async def _do_calendar_lookup() -> str:
 
 
 async def _do_mail_lookup() -> str:
+    log.debug(" entered successfully")
     """Slow mail fetch — runs in thread."""
     unread_info = await get_unread_count()
     if isinstance(unread_info, dict):
@@ -2007,6 +2060,7 @@ async def _do_mail_lookup() -> str:
 
 
 async def _do_screen_lookup() -> str:
+    log.debug(" entered successfully")
     """Capture screen and describe via Gemini vision, fall back to window list."""
     from screen import take_screenshot, get_active_windows
  
@@ -2061,6 +2115,7 @@ async def _do_screen_lookup() -> str:
 
 def get_lookup_status() -> str:
     """Get status of active lookups for when user asks 'how's that coming'."""
+    log.debug(" entered successfully")
     if not _active_lookups:
         return ""
     active = [v for v in _active_lookups.values() if v["status"] == "working"]
@@ -2074,6 +2129,7 @@ def get_lookup_status() -> str:
 
 def _short_sender(sender: str) -> str:
     """Extract just the name from an email sender string."""
+    log.debug(" entered successfully")
     if "<" in sender:
         return sender.split("<")[0].strip().strip('"')
     if "@" in sender:
@@ -2082,6 +2138,7 @@ def _short_sender(sender: str) -> str:
 
 async def handle_browse(text: str, target: str) -> str:
     """Open a URL directly or search. Smart about detecting URLs in speech."""
+    log.debug(" entered successfully")
     import re
     from urllib.parse import quote
 
@@ -2135,13 +2192,14 @@ async def handle_browse(text: str, target: str) -> str:
 
 async def handle_research(text: str, target: str) -> str:
     """Deep research with Gemini Pro — write results to HTML, open in browser."""
+    log.debug(" entered successfully")
     try:
         research_text, inp, out = await _call_gemini(
             system=f"You are JARVIS, researching a topic for {USER_NAME}. Be thorough, organized, and cite sources where possible.",
             messages=[{"role": "user", "content": f"Research this thoroughly:\n\n{target}"}],
             model_name=llm_model("fast"),
             max_tokens=2000,
-            thinking_budget=-1,
+            # thinking_budget=-1,
         )
         _track_usage(inp, out)
         import html as _html
@@ -2190,6 +2248,7 @@ async def _update_session_summary(
     rotated_messages: list[dict],
 ) -> str:
     """Background Flash call to update the rolling session summary."""
+    log.debug(" entered successfully")
     prompt = f"""Update this conversation summary to include the new messages.
 
 Current summary: {old_summary or '(start of conversation)'}
@@ -2229,6 +2288,7 @@ async def voice_handler(ws: WebSocket):
         {"type": "task_spawned", "task_id": "...", "prompt": "..."}
         {"type": "task_complete", "task_id": "...", "summary": "..."}
     """
+    log.debug(" entered successfully")
     await ws.accept()
     task_manager.register_websocket(ws)
     history: list[dict] = []
@@ -2747,6 +2807,7 @@ def _env_example_path() -> Path:
     return Path(__file__).parent / ".env.example"
 
 def _read_env() -> tuple[list[str], dict[str, str]]:
+    log.debug(" entered successfully")
     """Read .env file. Returns (raw_lines, parsed_dict). Creates from .env.example if missing."""
     path = _env_file_path()
     if not path.exists():
@@ -2766,6 +2827,7 @@ def _read_env() -> tuple[list[str], dict[str, str]]:
     return lines, parsed
 
 def _write_env_key(key: str, value: str) -> None:
+    log.debug(" entered successfully")
     """Update a single key in .env, preserving comments and order."""
     lines, _ = _read_env()
     found = False
@@ -2798,6 +2860,7 @@ class PreferencesUpdate(BaseModel):
 
 @app.post("/api/settings/keys")
 async def api_settings_keys(body: KeyUpdate):
+    log.debug(" entered successfully")
     allowed = {"GEMINI_API_KEY", "EDGE_TTS_VOICE", "USER_NAME", "HONORIFIC", "CALENDAR_ACCOUNTS"}
     if body.key_name not in allowed:
         return JSONResponse({"success": False, "error": "Invalid key name"}, status_code=400)
@@ -2811,6 +2874,7 @@ async def api_settings_keys(body: KeyUpdate):
 
 @app.post("/api/settings/test-gemini")
 async def api_test_gemini(body: KeyTest):
+    log.debug(" entered successfully")
     key = body.key_value or os.getenv("GEMINI_API_KEY", "")
     if not key:
         return {"valid": False, "error": "No key provided"}
@@ -2827,6 +2891,7 @@ async def api_test_gemini(body: KeyTest):
 
 @app.post("/api/settings/test-tts")
 async def api_test_tts(body: KeyTest):
+    log.debug(" entered successfully")
     """Test edge-tts — no API key needed, just verify the voice works."""
     voice = body.key_value or EDGE_TTS_VOICE
     try:
@@ -2839,6 +2904,7 @@ async def api_test_tts(body: KeyTest):
 
 @app.get("/api/settings/status")
 async def api_settings_status():
+    log.debug(" entered successfully")
     import shutil as _shutil
     _, env_dict = _read_env()
     gemini_cli_installed = _shutil.which("gemini") is not None
@@ -2872,6 +2938,7 @@ async def api_settings_status():
 
 @app.get("/api/settings/preferences")
 async def api_get_preferences():
+    log.debug(" entered successfully")
     _, env_dict = _read_env()
     return {
         "user_name": env_dict.get("USER_NAME", ""),
@@ -2881,6 +2948,7 @@ async def api_get_preferences():
 
 @app.post("/api/settings/preferences")
 async def api_save_preferences(body: PreferencesUpdate):
+    log.debug(" entered successfully")
     _write_env_key("USER_NAME", body.user_name)
     _write_env_key("HONORIFIC", body.honorific)
     _write_env_key("CALENDAR_ACCOUNTS", body.calendar_accounts)
@@ -2892,6 +2960,7 @@ async def api_save_preferences(body: PreferencesUpdate):
 
 @app.post("/api/restart")
 async def api_restart():
+    log.debug(" entered successfully")
     """Restart the JARVIS server."""
     log.info("Restart requested — shutting down in 2 seconds")
     async def _restart():
@@ -2901,9 +2970,9 @@ async def api_restart():
     asyncio.create_task(_restart())
     return {"status": "restarting"}
 
-
 @app.post("/api/fix-self")
 async def api_fix_self():
+    log.debug(" entered successfully")
     """Enter work mode in the JARVIS repo — JARVIS can now fix himself."""
     jarvis_dir = str(Path(__file__).parent)
     result = await open_terminal(f'cd /d "{jarvis_dir}" && gemini')

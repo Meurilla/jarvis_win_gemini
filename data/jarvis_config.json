@@ -15,9 +15,9 @@
     "provider": "gemini",
     "providers": {
       "gemini": {
-        "model": "gemini-2.5-flash-lite",
-        "model_research": "gemini-2.5-flash-lite",
-        "model_fast": "gemini-2.5-flash-lite",
+        "model": "gemma-4-31b-it",
+        "model_research": "gemma-4-31b-it",
+        "model_fast": "gemma-4-31b-it",
         "params": {
           "max_tokens": 600,
           "thinking_budget": 0,

@@ -30,7 +30,7 @@ DECISIONS_IN_PROMPT = 10
 SESSION_TIMEOUT_SECONDS = 1800
 
 # Gemini model for lightweight tasks
-GEMINI_MODEL = "gemini-2.5-flash-lite"
+GEMINI_MODEL = "gemma-4-31b-it"
 
 
 # ---------------------------------------------------------------------------
@@ -62,9 +62,11 @@ class PlanSummary:
     status: str = "none"  # "none" | "planning" | "building" | "complete"
 
     def to_dict(self) -> dict:
+        log.debug("entered successfully")
         return asdict(self)
 
     def to_text(self) -> str:
+        log.debug("entered successfully")
         """Format plan as readable text for context injection."""
         if not self.description:
             return "No active plan."
@@ -121,6 +123,7 @@ class ConversationSession:
 
     @property
     def is_active(self) -> bool:
+        log.debug("entered successfully")
         """True if session is open and not timed out."""
         if self._closed:
             return False
@@ -133,15 +136,18 @@ class ConversationSession:
 
     @property
     def exchange_count(self) -> int:
+        log.debug("entered successfully")
         return self._exchange_count
 
     @property
     def decision_count(self) -> int:
+        log.debug("entered successfully")
         return len(self.decisions)
 
     # -- Core Interface -------------------------------------------------------
 
     def add_exchange(self, role: str, content: str):
+        log.debug("entered successfully")
         """
         Record one side of an exchange. Call for both user and assistant turns.
 
@@ -165,6 +171,7 @@ class ConversationSession:
         self._last_activity = datetime.now()
 
     def get_context(self) -> str:
+        log.debug("entered successfully")
         """
         Return structured context string for injection into Gemini system prompt.
 
@@ -197,6 +204,7 @@ class ConversationSession:
         return "\n\n".join(parts) if parts else ""
 
     def log_decision(self, key: str, value: str, source: str = "conversation"):
+        log.debug("entered successfully")
         """
         Record a single decision directly.
 
@@ -213,6 +221,7 @@ class ConversationSession:
         log.info(f"Decision logged [{source}]: {key} = {value[:60]}")
 
     def log_plan(self, plan) -> None:
+        log.debug("entered successfully")
         """
         Receive a completed Plan from TaskPlanner and store its decisions.
 
@@ -266,6 +275,7 @@ class ConversationSession:
         )
 
     async def modify_plan(self, user_text: str, gemini_client) -> str:
+        log.debug("entered successfully")
         """
         Parse a natural language plan modification via Gemini Flash
         and update the current plan accordingly.
@@ -353,6 +363,7 @@ class ConversationSession:
     def _apply_modification(
         self, field: str, action: str, value: str, old_value: str
     ) -> str:
+        log.debug("entered successfully")
         """Apply a parsed modification to current_plan and return confirmation."""
         plan = self.current_plan
 
@@ -416,6 +427,7 @@ class ConversationSession:
             return "Understood, sir. I've noted that change."
 
     async def query(self, user_text: str, gemini_client) -> str:
+        log.debug("entered successfully")
         """
         Answer a question about session history or decisions via Gemini Flash,
         formatted as a JARVIS voice response.
@@ -472,6 +484,7 @@ class ConversationSession:
             return "I'm having trouble accessing the session records, sir."
 
     def mark_plan_complete(self):
+        log.debug("entered successfully")
         """Mark the current plan as complete — called when dispatch finishes."""
         if not self.current_plan.is_empty:
             self.current_plan.status = "complete"
@@ -483,6 +496,7 @@ class ConversationSession:
             log.info(f"Plan marked complete: {self.current_plan.description[:60]}")
 
     def close(self, reason: str = "disconnected"):
+        log.debug("entered successfully")
         """Close the session cleanly."""
         self._closed = True
         log.info(
@@ -507,7 +521,7 @@ Breaking Changes
 None. All public APIs remain identical.
 
 Bug Fixes
-Outdated Gemini model – Replaced gemini-2.0-flash-preview with gemini-2.5-flash-lite (defined as GEMINI_MODEL constant) in modify_plan and query.
+Outdated Gemini model – Replaced gemma-4-31b-it-preview with gemini-2.5-flash-lite (defined as GEMINI_MODEL constant) in modify_plan and query.
 
 Missing client validation – Added checks for gemini_client being None; returns graceful error messages instead of crashing.
 

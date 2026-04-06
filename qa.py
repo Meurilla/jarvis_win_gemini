@@ -30,6 +30,7 @@ _gemini_client = None
 
 def _get_client() -> Optional[genai.Client]:
     """Get or create a shared Gemini client."""
+    log.debug("entered successfully")
     global _gemini_client
     if _gemini_client is None and _GEMINI_API_KEY:
         _gemini_client = genai.Client(api_key=_GEMINI_API_KEY)
@@ -38,6 +39,7 @@ def _get_client() -> Optional[genai.Client]:
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
     """Extract JSON from a response that may be wrapped in markdown fences."""
+    log.debug("entered successfully")
     # Try direct parse first
     try:
         return json.loads(text.strip())
@@ -81,6 +83,7 @@ class QAAgent:
 
     async def verify(self, task_prompt: str, task_result: str, working_dir: str = ".") -> QAResult:
         """QA-check a completed task. Returns a QAResult."""
+        log.debug("entered successfully")
         client = _get_client()
         if not client:
             log.warning("QA skipped — no API key")
@@ -170,6 +173,7 @@ class QAAgent:
 
         Returns a dict with keys: status, result, error, attempt.
         """
+        log.debug("entered successfully")
         if attempt >= MAX_RETRIES:
             return {
                 "status": "failed",

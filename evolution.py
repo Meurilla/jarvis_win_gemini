@@ -149,6 +149,7 @@ class Improvement:
 # ---------------------------------------------------------------------------
 
 def _get_db() -> sqlite3.Connection:
+    log.debug("entered successfully")
     """
     Reuse the thread-local connection pool from dispatch_registry.
 
@@ -178,6 +179,7 @@ def _get_db() -> sqlite3.Connection:
 # ---------------------------------------------------------------------------
 
 def _collect_failure_texts(task_type: str) -> tuple[list[str], int]:
+    log.debug("entered successfully")
     """
     Collect text to scan for failure patterns and count total failures.
 
@@ -244,6 +246,7 @@ class TemplateEvolver:
     # -- Analysis -------------------------------------------------------------
 
     def analyze_failures(self, task_type: str) -> FailureAnalysis:
+        log.debug("entered successfully")
         """
         Analyze failed tasks to identify common failure patterns.
 
@@ -289,6 +292,7 @@ class TemplateEvolver:
     # -- Improvement suggestions ----------------------------------------------
 
     def suggest_improvements(self, task_type: str) -> list[Improvement]:
+        log.debug("entered successfully")
         """
         Generate specific template improvement suggestions.
 
@@ -342,6 +346,7 @@ class TemplateEvolver:
     def create_new_version(
         self, task_type: str, improvements: list[Improvement]
     ) -> str:
+        log.debug("entered successfully")
         """
         Apply improvements to the latest template and save a new version.
 
@@ -429,6 +434,7 @@ class TemplateEvolver:
         task_type: str,
         min_failures: int = DEFAULT_MIN_FAILURES,
     ) -> Optional[str]:
+        log.debug("entered successfully")
         """
         Check if evolution is warranted and create a new version if so.
 
@@ -460,6 +466,7 @@ class TemplateEvolver:
     # -- Private helpers ------------------------------------------------------
 
     def _find_latest_template(self, task_type: str) -> Optional[Path]:
+        log.debug("entered successfully")
         """
         Find the most recent template file for a task type.
 
@@ -475,6 +482,7 @@ class TemplateEvolver:
 
     @staticmethod
     def _load_template(path: Path) -> Optional[dict]:
+        log.debug("entered successfully")
         """Load and parse a YAML template file. Returns None on error."""
         try:
             return yaml.safe_load(path.read_text(encoding="utf-8"))

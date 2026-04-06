@@ -1,0 +1,410 @@
+2026-04-06 19:08:50 [jarvis.config] _load(): Config loaded from E:\Joe\Kaelion\Projects\JarvisWinGem\data\jarvis_config.json
+2026-04-06 19:08:50 [jarvis.dispatch] _init_db(): entered successfully
+2026-04-06 19:08:50 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:08:50 [jarvis.dispatch] _get_db(): Opened new DB connection (thread-local)
+2026-04-06 19:08:50 [jarvis.dispatch] _migrate_db(): entered successfully
+2026-04-06 19:08:50 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:08:50 [jarvis.dispatch] _init_db(): entered successfully
+2026-04-06 19:08:50 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:08:50 [jarvis.dispatch] _migrate_db(): entered successfully
+2026-04-06 19:08:50 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:08:50 [jarvis] lifespan():  entered successfully
+2026-04-06 19:08:51 [jarvis] lifespan(): Gemini API configured
+2026-04-06 19:08:51 [jarvis.browser] _check_playwright(): entered successfully
+2026-04-06 19:08:51 [jarvis] lifespan(): Browser instance created
+2026-04-06 19:08:51 [jarvis] _refresh_context_sync():  entered successfully
+2026-04-06 19:08:51 [jarvis] _refresh_context_sync(): Context refresh thread started
+2026-04-06 19:08:51 [jarvis] lifespan(): JARVIS server starting
+2026-04-06 19:09:05 [jarvis] voice_handler():  entered successfully
+2026-04-06 19:09:05 [jarvis] register_websocket():  entered successfully
+2026-04-06 19:09:05 [jarvis] voice_handler(): Voice WebSocket connected
+2026-04-06 19:09:05 [jarvis] synthesize_speech():  entered successfully
+2026-04-06 19:09:07 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:09:07 [jarvis] _send_greeting(): JARVIS: Good evening, sir.
+2026-04-06 19:09:07 [jarvis] api_settings_status():  entered successfully
+2026-04-06 19:09:07 [jarvis] _read_env():  entered successfully
+2026-04-06 19:09:07 [jarvis.calendar] _ensure_calendar_running(): Failed to launch Calendar: [WinError 2] The system cannot find the file specified
+2026-04-06 19:09:07 [jarvis.calendar] _fetch_calendar_events(): Calendar auto error: [WinError 2] The system cannot find the file specified
+2026-04-06 19:09:07 [jarvis.calendar] refresh_cache(): Calendar cache refreshed: 0 events today (0.0s)
+2026-04-06 19:09:07 [jarvis.mail] _ensure_mail_running(): Failed to launch Mail: [WinError 2] The system cannot find the file specified
+2026-04-06 19:09:07 [jarvis.mail] _run_mail_script(): Mail script error: [WinError 2] The system cannot find the file specified
+2026-04-06 19:09:07 [jarvis.memory] get_important_memories(): entered successfully
+2026-04-06 19:09:07 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:09:07 [jarvis.memory] get_open_tasks(): entered successfully
+2026-04-06 19:09:07 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:09:54 [jarvis] apply_speech_corrections():  entered successfully
+2026-04-06 19:09:54 [jarvis] voice_handler(): User: hey Jarvis please open the browser
+2026-04-06 19:09:54 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:09:54 [jarvis] _scan_projects_sync():  entered successfully
+2026-04-06 19:09:54 [jarvis] voice_handler(): Scanned 10 projects
+2026-04-06 19:09:54 [jarvis.planner] is_planning(): entered successfully
+2026-04-06 19:09:54 [jarvis.work_mode] active(): entered successfully
+2026-04-06 19:09:54 [jarvis] detect_action_fast():  entered successfully
+2026-04-06 19:09:54 [jarvis.conversation] get_context(): entered successfully
+2026-04-06 19:09:54 [jarvis] generate_response():  entered successfully
+2026-04-06 19:09:54 [jarvis] get_lookup_status():  entered successfully
+2026-04-06 19:09:54 [jarvis] get_active_tasks_summary():  entered successfully
+2026-04-06 19:09:54 [jarvis.dispatch] format_for_prompt(): entered successfully
+2026-04-06 19:09:54 [jarvis.dispatch] get_active(): entered successfully
+2026-04-06 19:09:54 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:09:54 [jarvis.dispatch] get_recent(): entered successfully
+2026-04-06 19:09:54 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:09:54 [jarvis] format_projects_for_prompt():  entered successfully
+2026-04-06 19:09:54 [jarvis.memory] build_memory_context(): entered successfully
+2026-04-06 19:09:54 [jarvis.memory] get_open_tasks(): entered successfully
+2026-04-06 19:09:54 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:09:54 [jarvis.memory] recall(): entered successfully
+2026-04-06 19:09:54 [jarvis.memory] _sanitize_fts_query(): entered successfully
+2026-04-06 19:09:54 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:09:54 [jarvis.memory] get_important_memories(): entered successfully
+2026-04-06 19:09:54 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:09:54 [jarvis] _call_gemini():  entered successfully
+2026-04-06 19:09:54 [jarvis] _to_gemini_contents():  entered successfully
+2026-04-06 19:10:04 [jarvis] _track_usage():  entered successfully
+2026-04-06 19:10:04 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:10:04 [jarvis] extract_action():  entered successfully
+2026-04-06 19:10:04 [jarvis] voice_handler(): LLM embedded action: {'action': 'browse', 'target': 'https://www.google.com'}
+2026-04-06 19:10:04 [jarvis] strip_markdown_for_tts():  entered successfully
+2026-04-06 19:10:04 [jarvis] synthesize_speech():  entered successfully
+2026-04-06 19:10:04 [jarvis] _execute_browse():  entered successfully
+2026-04-06 19:10:04 [jarvis.actions] open_browser(): entered successfully
+2026-04-06 19:10:04 [jarvis.actions] open_browser(): Opened https://www.google.com in your browser
+2026-04-06 19:10:04 [jarvis.memory] extract_memories(): entered successfully
+2026-04-06 19:10:04 [jarvis.memory] _get_gemini_client(): entered successfully
+2026-04-06 19:10:06 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:10:06 [jarvis] voice_handler(): JARVIS: Right away, sir.
+2026-04-06 19:10:06 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:11:44 [jarvis] apply_speech_corrections():  entered successfully
+2026-04-06 19:11:44 [jarvis] voice_handler(): User: all right pretty good um please do a search for Michael Keaton
+2026-04-06 19:11:44 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:11:44 [jarvis.planner] is_planning(): entered successfully
+2026-04-06 19:11:44 [jarvis.work_mode] active(): entered successfully
+2026-04-06 19:11:44 [jarvis] detect_action_fast():  entered successfully
+2026-04-06 19:11:44 [jarvis.conversation] get_context(): entered successfully
+2026-04-06 19:11:44 [jarvis] generate_response():  entered successfully
+2026-04-06 19:11:44 [jarvis] get_lookup_status():  entered successfully
+2026-04-06 19:11:44 [jarvis] get_active_tasks_summary():  entered successfully
+2026-04-06 19:11:44 [jarvis.dispatch] format_for_prompt(): entered successfully
+2026-04-06 19:11:44 [jarvis.dispatch] get_active(): entered successfully
+2026-04-06 19:11:44 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:11:44 [jarvis.dispatch] get_recent(): entered successfully
+2026-04-06 19:11:44 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:11:44 [jarvis] format_projects_for_prompt():  entered successfully
+2026-04-06 19:11:44 [jarvis.memory] build_memory_context(): entered successfully
+2026-04-06 19:11:44 [jarvis.memory] get_open_tasks(): entered successfully
+2026-04-06 19:11:44 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:11:44 [jarvis.memory] recall(): entered successfully
+2026-04-06 19:11:44 [jarvis.memory] _sanitize_fts_query(): entered successfully
+2026-04-06 19:11:44 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:11:44 [jarvis.memory] get_important_memories(): entered successfully
+2026-04-06 19:11:44 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:11:44 [jarvis] _call_gemini():  entered successfully
+2026-04-06 19:11:44 [jarvis] _to_gemini_contents():  entered successfully
+2026-04-06 19:11:48 [jarvis] _track_usage():  entered successfully
+2026-04-06 19:11:48 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:11:48 [jarvis] extract_action():  entered successfully
+2026-04-06 19:11:48 [jarvis] voice_handler(): LLM embedded action: {'action': 'browse', 'target': 'Michael Keaton'}
+2026-04-06 19:11:48 [jarvis] strip_markdown_for_tts():  entered successfully
+2026-04-06 19:11:48 [jarvis] synthesize_speech():  entered successfully
+2026-04-06 19:11:48 [jarvis] _execute_browse():  entered successfully
+2026-04-06 19:11:48 [jarvis.actions] open_browser(): entered successfully
+2026-04-06 19:11:48 [jarvis.actions] open_browser(): Opened https://www.google.com/search?q=Michael%20Keaton in your browser
+2026-04-06 19:11:48 [jarvis.memory] extract_memories(): entered successfully
+2026-04-06 19:11:48 [jarvis.memory] _get_gemini_client(): entered successfully
+2026-04-06 19:11:50 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:11:50 [jarvis] voice_handler(): JARVIS: Pulled that up in Chrome, sir.
+2026-04-06 19:11:50 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:12:41 [jarvis] apply_speech_corrections():  entered successfully
+2026-04-06 19:12:42 [jarvis] voice_handler(): User: can you read the about section on Michael Keaton
+2026-04-06 19:12:42 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:12:42 [jarvis.planner] is_planning(): entered successfully
+2026-04-06 19:12:42 [jarvis.work_mode] active(): entered successfully
+2026-04-06 19:12:42 [jarvis] detect_action_fast():  entered successfully
+2026-04-06 19:12:42 [jarvis.conversation] get_context(): entered successfully
+2026-04-06 19:12:42 [jarvis] generate_response():  entered successfully
+2026-04-06 19:12:42 [jarvis] get_lookup_status():  entered successfully
+2026-04-06 19:12:42 [jarvis] get_active_tasks_summary():  entered successfully
+2026-04-06 19:12:42 [jarvis.dispatch] format_for_prompt(): entered successfully
+2026-04-06 19:12:42 [jarvis.dispatch] get_active(): entered successfully
+2026-04-06 19:12:42 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:12:42 [jarvis.dispatch] get_recent(): entered successfully
+2026-04-06 19:12:42 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:12:42 [jarvis] format_projects_for_prompt():  entered successfully
+2026-04-06 19:12:42 [jarvis.memory] build_memory_context(): entered successfully
+2026-04-06 19:12:42 [jarvis.memory] get_open_tasks(): entered successfully
+2026-04-06 19:12:42 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:12:42 [jarvis.memory] recall(): entered successfully
+2026-04-06 19:12:42 [jarvis.memory] _sanitize_fts_query(): entered successfully
+2026-04-06 19:12:42 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:12:42 [jarvis.memory] get_important_memories(): entered successfully
+2026-04-06 19:12:42 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:12:42 [jarvis] _call_gemini():  entered successfully
+2026-04-06 19:12:42 [jarvis] _to_gemini_contents():  entered successfully
+2026-04-06 19:12:51 [jarvis] _track_usage():  entered successfully
+2026-04-06 19:12:51 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:12:51 [jarvis] extract_action():  entered successfully
+2026-04-06 19:12:51 [jarvis] voice_handler(): LLM embedded action: {'action': 'screen', 'target': ''}
+2026-04-06 19:12:51 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:12:51 [jarvis] _lookup_and_report():  entered successfully
+2026-04-06 19:12:51 [jarvis] _do_screen_lookup():  entered successfully
+2026-04-06 19:12:51 [jarvis.memory] extract_memories(): entered successfully
+2026-04-06 19:12:51 [jarvis.memory] _get_gemini_client(): entered successfully
+2026-04-06 19:12:51 [jarvis.screen] _screenshot_windows(): Screenshot captured via mss: 252136 bytes
+2026-04-06 19:13:21 [jarvis] synthesize_speech():  entered successfully
+2026-04-06 19:13:23 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:15:20 [jarvis] apply_speech_corrections():  entered successfully
+2026-04-06 19:15:21 [jarvis] voice_handler(): User: are we still working or have you finished
+2026-04-06 19:15:21 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:15:21 [jarvis.planner] is_planning(): entered successfully
+2026-04-06 19:15:21 [jarvis.work_mode] active(): entered successfully
+2026-04-06 19:15:21 [jarvis] detect_action_fast():  entered successfully
+2026-04-06 19:15:21 [jarvis.conversation] get_context(): entered successfully
+2026-04-06 19:15:21 [jarvis] generate_response():  entered successfully
+2026-04-06 19:15:21 [jarvis] get_lookup_status():  entered successfully
+2026-04-06 19:15:21 [jarvis] get_active_tasks_summary():  entered successfully
+2026-04-06 19:15:21 [jarvis.dispatch] format_for_prompt(): entered successfully
+2026-04-06 19:15:21 [jarvis.dispatch] get_active(): entered successfully
+2026-04-06 19:15:21 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:15:21 [jarvis.dispatch] get_recent(): entered successfully
+2026-04-06 19:15:21 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:15:21 [jarvis] format_projects_for_prompt():  entered successfully
+2026-04-06 19:15:21 [jarvis.memory] build_memory_context(): entered successfully
+2026-04-06 19:15:21 [jarvis.memory] get_open_tasks(): entered successfully
+2026-04-06 19:15:21 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:15:21 [jarvis.memory] recall(): entered successfully
+2026-04-06 19:15:21 [jarvis.memory] _sanitize_fts_query(): entered successfully
+2026-04-06 19:15:21 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:15:21 [jarvis.memory] get_important_memories(): entered successfully
+2026-04-06 19:15:21 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:15:21 [jarvis] _call_gemini():  entered successfully
+2026-04-06 19:15:21 [jarvis] _to_gemini_contents():  entered successfully
+2026-04-06 19:15:38 [jarvis] _track_usage():  entered successfully
+2026-04-06 19:15:38 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:15:38 [jarvis] extract_action():  entered successfully
+2026-04-06 19:15:38 [jarvis] voice_handler(): LLM embedded action: {'action': 'screen', 'target': ''}
+2026-04-06 19:15:38 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:15:38 [jarvis] _lookup_and_report():  entered successfully
+2026-04-06 19:15:38 [jarvis] _do_screen_lookup():  entered successfully
+2026-04-06 19:15:38 [jarvis.memory] extract_memories(): entered successfully
+2026-04-06 19:15:38 [jarvis.memory] _get_gemini_client(): entered successfully
+2026-04-06 19:15:38 [jarvis.screen] _screenshot_windows(): Screenshot captured via mss: 244918 bytes
+2026-04-06 19:16:05 [jarvis] strip_markdown_for_tts():  entered successfully
+2026-04-06 19:16:05 [jarvis] synthesize_speech():  entered successfully
+2026-04-06 19:16:10 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:16:10 [jarvis] _lookup_and_report(): Lookup screen complete: Visual Studio Code is in focus with the jarvis_debug.log file open, displaying l
+2026-04-06 19:18:01 [jarvis] apply_speech_corrections():  entered successfully
+2026-04-06 19:18:01 [jarvis] voice_handler(): User: jerus to me a favor and search for uh the Lord anthropic snowed uh Pro subscription API rate limits
+2026-04-06 19:18:01 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:18:01 [jarvis.planner] is_planning(): entered successfully
+2026-04-06 19:18:01 [jarvis.work_mode] active(): entered successfully
+2026-04-06 19:18:01 [jarvis] detect_action_fast():  entered successfully
+2026-04-06 19:18:01 [jarvis.conversation] get_context(): entered successfully
+2026-04-06 19:18:01 [jarvis] generate_response():  entered successfully
+2026-04-06 19:18:01 [jarvis] get_lookup_status():  entered successfully
+2026-04-06 19:18:01 [jarvis] get_active_tasks_summary():  entered successfully
+2026-04-06 19:18:01 [jarvis.dispatch] format_for_prompt(): entered successfully
+2026-04-06 19:18:01 [jarvis.dispatch] get_active(): entered successfully
+2026-04-06 19:18:01 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:18:01 [jarvis.dispatch] get_recent(): entered successfully
+2026-04-06 19:18:01 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:18:01 [jarvis] format_projects_for_prompt():  entered successfully
+2026-04-06 19:18:01 [jarvis.memory] build_memory_context(): entered successfully
+2026-04-06 19:18:01 [jarvis.memory] get_open_tasks(): entered successfully
+2026-04-06 19:18:01 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:18:01 [jarvis.memory] recall(): entered successfully
+2026-04-06 19:18:01 [jarvis.memory] _sanitize_fts_query(): entered successfully
+2026-04-06 19:18:01 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:18:01 [jarvis.memory] get_important_memories(): entered successfully
+2026-04-06 19:18:01 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:18:01 [jarvis] _call_gemini():  entered successfully
+2026-04-06 19:18:01 [jarvis] _to_gemini_contents():  entered successfully
+2026-04-06 19:18:10 [jarvis] _track_usage():  entered successfully
+2026-04-06 19:18:10 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:18:10 [jarvis] extract_action():  entered successfully
+2026-04-06 19:18:10 [jarvis] voice_handler(): LLM embedded action: {'action': 'browse', 'target': 'Anthropic Claude Pro API rate limits'}
+2026-04-06 19:18:10 [jarvis] strip_markdown_for_tts():  entered successfully
+2026-04-06 19:18:10 [jarvis] synthesize_speech():  entered successfully
+2026-04-06 19:18:10 [jarvis] _execute_browse():  entered successfully
+2026-04-06 19:18:10 [jarvis.actions] open_browser(): entered successfully
+2026-04-06 19:18:11 [jarvis.actions] open_browser(): Opened https://www.google.com/search?q=Anthropic%20Claude%20Pro%20API%20rate%20limits in your browser
+2026-04-06 19:18:11 [jarvis.memory] extract_memories(): entered successfully
+2026-04-06 19:18:11 [jarvis.memory] _get_gemini_client(): entered successfully
+2026-04-06 19:18:12 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:18:12 [jarvis] voice_handler(): JARVIS: Right away, sir.
+2026-04-06 19:18:12 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:20:08 [jarvis] apply_speech_corrections():  entered successfully
+2026-04-06 19:20:09 [jarvis] voice_handler(): User: can you look up the anthropic Claude code uh limits for me
+2026-04-06 19:20:09 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:20:09 [jarvis.planner] is_planning(): entered successfully
+2026-04-06 19:20:09 [jarvis.work_mode] active(): entered successfully
+2026-04-06 19:20:09 [jarvis] detect_action_fast():  entered successfully
+2026-04-06 19:20:09 [jarvis.conversation] get_context(): entered successfully
+2026-04-06 19:20:09 [jarvis] generate_response():  entered successfully
+2026-04-06 19:20:09 [jarvis] get_lookup_status():  entered successfully
+2026-04-06 19:20:09 [jarvis] get_active_tasks_summary():  entered successfully
+2026-04-06 19:20:09 [jarvis.dispatch] format_for_prompt(): entered successfully
+2026-04-06 19:20:09 [jarvis.dispatch] get_active(): entered successfully
+2026-04-06 19:20:09 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:20:09 [jarvis.dispatch] get_recent(): entered successfully
+2026-04-06 19:20:09 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:20:09 [jarvis] format_projects_for_prompt():  entered successfully
+2026-04-06 19:20:09 [jarvis.memory] build_memory_context(): entered successfully
+2026-04-06 19:20:09 [jarvis.memory] get_open_tasks(): entered successfully
+2026-04-06 19:20:09 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:20:09 [jarvis.memory] recall(): entered successfully
+2026-04-06 19:20:09 [jarvis.memory] _sanitize_fts_query(): entered successfully
+2026-04-06 19:20:09 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:20:09 [jarvis.memory] get_important_memories(): entered successfully
+2026-04-06 19:20:09 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:20:09 [jarvis] _call_gemini():  entered successfully
+2026-04-06 19:20:09 [jarvis] _to_gemini_contents():  entered successfully
+2026-04-06 19:20:16 [jarvis] _track_usage():  entered successfully
+2026-04-06 19:20:16 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:20:16 [jarvis] extract_action():  entered successfully
+2026-04-06 19:20:16 [jarvis] voice_handler(): LLM embedded action: {'action': 'browse', 'target': 'Anthropic Claude Code API rate limits'}
+2026-04-06 19:20:16 [jarvis] strip_markdown_for_tts():  entered successfully
+2026-04-06 19:20:16 [jarvis] synthesize_speech():  entered successfully
+2026-04-06 19:20:16 [jarvis] _execute_browse():  entered successfully
+2026-04-06 19:20:16 [jarvis.actions] open_browser(): entered successfully
+2026-04-06 19:20:16 [jarvis.actions] open_browser(): Opened https://www.google.com/search?q=Anthropic%20Claude%20Code%20API%20rate%20limits in your browser
+2026-04-06 19:20:16 [jarvis.memory] extract_memories(): entered successfully
+2026-04-06 19:20:16 [jarvis.memory] _get_gemini_client(): entered successfully
+2026-04-06 19:20:18 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:20:18 [jarvis] voice_handler(): JARVIS: Right away, sir.
+2026-04-06 19:20:18 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:21:38 [jarvis] apply_speech_corrections():  entered successfully
+2026-04-06 19:21:38 [jarvis] voice_handler(): User: okay it's nice and all that you open the web browser but I would have liked you to find the result of the search and speak it back to me
+2026-04-06 19:21:38 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:21:38 [jarvis.planner] is_planning(): entered successfully
+2026-04-06 19:21:38 [jarvis.work_mode] active(): entered successfully
+2026-04-06 19:21:38 [jarvis] detect_action_fast():  entered successfully
+2026-04-06 19:21:38 [jarvis.conversation] get_context(): entered successfully
+2026-04-06 19:21:38 [jarvis] generate_response():  entered successfully
+2026-04-06 19:21:38 [jarvis] get_lookup_status():  entered successfully
+2026-04-06 19:21:38 [jarvis] get_active_tasks_summary():  entered successfully
+2026-04-06 19:21:38 [jarvis.dispatch] format_for_prompt(): entered successfully
+2026-04-06 19:21:38 [jarvis.dispatch] get_active(): entered successfully
+2026-04-06 19:21:38 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:21:38 [jarvis.dispatch] get_recent(): entered successfully
+2026-04-06 19:21:38 [jarvis.dispatch] _get_db(): entered successfully
+2026-04-06 19:21:38 [jarvis] format_projects_for_prompt():  entered successfully
+2026-04-06 19:21:38 [jarvis.memory] build_memory_context(): entered successfully
+2026-04-06 19:21:38 [jarvis.memory] get_open_tasks(): entered successfully
+2026-04-06 19:21:38 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:21:38 [jarvis.memory] recall(): entered successfully
+2026-04-06 19:21:38 [jarvis.memory] _sanitize_fts_query(): entered successfully
+2026-04-06 19:21:38 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:21:38 [jarvis.memory] get_important_memories(): entered successfully
+2026-04-06 19:21:38 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:21:38 [jarvis] _call_gemini():  entered successfully
+2026-04-06 19:21:38 [jarvis] _to_gemini_contents():  entered successfully
+2026-04-06 19:21:51 [jarvis] _track_usage():  entered successfully
+2026-04-06 19:21:51 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:21:51 [jarvis] extract_action():  entered successfully
+2026-04-06 19:21:51 [jarvis] voice_handler(): LLM embedded action: {'action': 'research', 'target': 'Find the current API rate limits for Anthropic Claude Pro subscription and Claude Code, focusing on tokens per minute and requests per day.'}
+2026-04-06 19:21:51 [jarvis.actions] _generate_project_name(): entered successfully
+2026-04-06 19:21:51 [jarvis.work_mode] start(): entered successfully
+2026-04-06 19:21:51 [jarvis.work_mode] start(): Work mode started: find-current-api-rate (E:\Joe\Kaelion\Projects\JarvisWinGem\find-current-api-rate)
+2026-04-06 19:21:51 [jarvis] strip_markdown_for_tts():  entered successfully
+2026-04-06 19:21:51 [jarvis] synthesize_speech():  entered successfully
+2026-04-06 19:21:51 [jarvis] self_work_and_notify():  entered successfully
+2026-04-06 19:21:51 [jarvis.work_mode] send(): entered successfully
+2026-04-06 19:21:51 [jarvis.work_mode] _send_via_cli(): entered successfully
+2026-04-06 19:21:51 [jarvis.memory] extract_memories(): entered successfully
+2026-04-06 19:21:51 [jarvis.memory] _get_gemini_client(): entered successfully
+2026-04-06 19:21:52 [jarvis.work_mode] _send_via_cli(): Agent CLI error: Not enough arguments following: p
+Usage: gemini [options] [command]
+
+Gemini CLI - Defaults to interactive mode. Use -p/--prompt for non-interactive (headless) mode.
+
+Commands:
+  gemini mcp            
+2026-04-06 19:21:52 [jarvis] self_work_and_notify(): Background work complete (220 chars)
+2026-04-06 19:21:52 [jarvis] _call_gemini():  entered successfully
+2026-04-06 19:21:52 [jarvis] _to_gemini_contents():  entered successfully
+2026-04-06 19:21:52 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:21:52 [jarvis] voice_handler(): JARVIS: Understood, sir. I'll retrieve the specific limits for you now.
+2026-04-06 19:21:52 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:21:52 [jarvis.memory] remember(): entered successfully
+2026-04-06 19:21:52 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:21:52 [jarvis.memory] remember(): Stored memory [preference]: User wants search results to be spoken back
+2026-04-06 19:21:52 [jarvis.memory] remember(): entered successfully
+2026-04-06 19:21:52 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:21:52 [jarvis.memory] remember(): Stored memory [decision]: JARVIS will retrieve specific limits
+2026-04-06 19:22:05 [jarvis] _track_usage():  entered successfully
+2026-04-06 19:22:05 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:22:05 [jarvis] synthesize_speech():  entered successfully
+2026-04-06 19:22:07 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:22:07 [jarvis] self_work_and_notify(): JARVIS: I attempted to execute a command via the Gemini CLI but encountered a missing argument error.
+2026-04-06 19:24:40 [jarvis] apply_speech_corrections():  entered successfully
+2026-04-06 19:24:40 [jarvis] voice_handler(): User: okay uh yeah I changed your language model so I probably going to have to uh fix the cli coding
+2026-04-06 19:24:40 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:24:40 [jarvis.planner] is_planning(): entered successfully
+2026-04-06 19:24:40 [jarvis.work_mode] active(): entered successfully
+2026-04-06 19:24:40 [jarvis.work_mode] is_casual_question(): entered successfully
+2026-04-06 19:24:40 [jarvis] voice_handler(): Work mode → agent: okay uh yeah I changed your language model so I probably going to have to uh fix
+2026-04-06 19:24:40 [jarvis.work_mode] send(): entered successfully
+2026-04-06 19:24:40 [jarvis.work_mode] _send_via_cli(): entered successfully
+2026-04-06 19:24:41 [jarvis.work_mode] _send_via_cli(): Agent CLI error: Not enough arguments following: p
+Usage: gemini [options] [command]
+
+Gemini CLI - Defaults to interactive mode. Use -p/--prompt for non-interactive (headless) mode.
+
+Commands:
+  gemini mcp            
+2026-04-06 19:24:41 [jarvis] _call_gemini():  entered successfully
+2026-04-06 19:24:41 [jarvis] _to_gemini_contents():  entered successfully
+2026-04-06 19:24:54 [jarvis] _track_usage():  entered successfully
+2026-04-06 19:24:54 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:24:54 [jarvis] strip_markdown_for_tts():  entered successfully
+2026-04-06 19:24:54 [jarvis] synthesize_speech():  entered successfully
+2026-04-06 19:24:54 [jarvis.memory] extract_memories(): entered successfully
+2026-04-06 19:24:54 [jarvis.memory] _get_gemini_client(): entered successfully
+2026-04-06 19:24:55 [jarvis.memory] extract_memories(): Memory extraction failed: Unterminated string starting at: line 29 column 16 (char 539)
+2026-04-06 19:24:56 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:24:56 [jarvis] voice_handler(): JARVIS: I encountered a minor setback, Kaelion; I attempted to execute a command via the Gemini CLI but failed to provide the required argument for the prompt flag.
+2026-04-06 19:24:56 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:25:13 [jarvis] apply_speech_corrections():  entered successfully
+2026-04-06 19:25:13 [jarvis] voice_handler(): User: yeah now it won't work because I have to reconcigure the coding
+2026-04-06 19:25:13 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 19:25:13 [jarvis.planner] is_planning(): entered successfully
+2026-04-06 19:25:13 [jarvis.work_mode] active(): entered successfully
+2026-04-06 19:25:13 [jarvis.work_mode] is_casual_question(): entered successfully
+2026-04-06 19:25:13 [jarvis] voice_handler(): Work mode → agent: yeah now it won't work because I have to reconcigure the coding
+2026-04-06 19:25:13 [jarvis.work_mode] send(): entered successfully
+2026-04-06 19:25:13 [jarvis.work_mode] _send_via_cli(): entered successfully
+2026-04-06 19:25:14 [jarvis.work_mode] _send_via_cli(): Agent CLI error: Not enough arguments following: p
+Usage: gemini [options] [command]
+
+Gemini CLI - Defaults to interactive mode. Use -p/--prompt for non-interactive (headless) mode.
+
+Commands:
+  gemini mcp            
+2026-04-06 19:25:14 [jarvis] _call_gemini():  entered successfully
+2026-04-06 19:25:14 [jarvis] _to_gemini_contents():  entered successfully
+2026-04-06 19:25:27 [jarvis] _track_usage():  entered successfully
+2026-04-06 19:25:27 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:25:27 [jarvis] strip_markdown_for_tts():  entered successfully
+2026-04-06 19:25:27 [jarvis] synthesize_speech():  entered successfully
+2026-04-06 19:25:27 [jarvis.memory] extract_memories(): entered successfully
+2026-04-06 19:25:27 [jarvis.memory] _get_gemini_client(): entered successfully
+2026-04-06 19:25:29 [jarvis.memory] remember(): entered successfully
+2026-04-06 19:25:29 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:25:29 [jarvis.memory] remember(): Stored memory [project]: Reconfiguring coding
+2026-04-06 19:25:29 [jarvis.memory] remember(): entered successfully
+2026-04-06 19:25:29 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:25:29 [jarvis.memory] remember(): Stored memory [project]: Gemini CLI
+2026-04-06 19:25:29 [jarvis.memory] remember(): entered successfully
+2026-04-06 19:25:29 [jarvis.memory] _get_db(): entered successfully
+2026-04-06 19:25:29 [jarvis.memory] remember(): Stored memory [project]: Providing necessary prompt argument following the flag for G
+2026-04-06 19:25:29 [jarvis] _append_usage_entry():  entered successfully
+2026-04-06 19:25:29 [jarvis] voice_handler(): JARVIS: I encountered a slight complication with the Gemini CLI, sir, as I failed to provide the necessary prompt argument following the flag.
+2026-04-06 19:25:29 [jarvis.conversation] add_exchange(): entered successfully
+2026-04-06 20:09:14 [jarvis] voice_handler(): Voice WebSocket disconnected
+2026-04-06 20:09:14 [jarvis] unregister_websocket():  entered successfully
+2026-04-06 20:09:14 [jarvis.conversation] close(): entered successfully
+2026-04-06 20:09:14 [jarvis.conversation] close(): Conversation session closed (disconnected): 9 exchanges, 0 decisions, 60m
+2026-04-06 20:09:15 [jarvis.browser] close(): entered successfully
+2026-04-06 20:09:15 [jarvis.browser] close(): Browser closed
+2026-04-06 20:09:15 [jarvis] lifespan(): Browser closed on shutdown
+2026-04-06 20:09:15 [jarvis] lifespan(): exited successfully

@@ -35,6 +35,7 @@ _AGENT_CLI_ENV = os.getenv("AGENT_CLI", "gemini").lower()
 
 def _resolve_agent_cli() -> Optional[str]:
     """Find the agentic CLI binary. Returns full path or None."""
+    log.debug("entered successfully")
     if _AGENT_CLI_ENV == "none":
         return None
     # Try the explicitly configured name first, then common fallbacks
@@ -53,6 +54,7 @@ _AGENT_CLI_PATH: Optional[str] = _resolve_agent_cli()
 # Terminal
 # ---------------------------------------------------------------------------
 async def open_terminal(command: str = "") -> Dict[str, Any]:
+    log.debug("entered successfully")
     """Open a terminal window, optionally running a command.
 
     Windows: uses Windows Terminal (wt) if available, falls back to cmd.exe.
@@ -96,6 +98,7 @@ async def open_terminal(command: str = "") -> Dict[str, Any]:
 # Browser
 # ---------------------------------------------------------------------------
 async def open_browser(url: str, browser: str = "chrome") -> Dict[str, Any]:
+    log.debug("entered successfully")
     """Open a URL in the user's browser."""
     try:
         if sys.platform == "win32":
@@ -129,6 +132,7 @@ async def open_browser(url: str, browser: str = "chrome") -> Dict[str, Any]:
 
 
 async def open_chrome(url: str) -> Dict[str, Any]:
+    log.debug("entered successfully")
     """Backward-compatible alias."""
     return await open_browser(url, "chrome")
 
@@ -137,6 +141,7 @@ async def open_chrome(url: str) -> Dict[str, Any]:
 # Agent CLI in project (renamed from open_claude_in_project)
 # ---------------------------------------------------------------------------
 async def open_agent_in_project(project_dir: str, prompt: str) -> Dict[str, Any]:
+    log.debug("entered successfully")
     """Open a terminal in the project directory and run the configured agent CLI."""
     agent = _AGENT_CLI_PATH
     if not agent:
@@ -190,16 +195,17 @@ async def open_agent_in_project(project_dir: str, prompt: str) -> Dict[str, Any]
 # ---------------------------------------------------------------------------
 # Legacy alias (deprecated)
 # ---------------------------------------------------------------------------
-async def open_claude_in_project(project_dir: str, prompt: str) -> Dict[str, Any]:
-    """Deprecated alias for open_agent_in_project."""
+"""async def open_claude_in_project(project_dir: str, prompt: str) -> Dict[str, Any]:
+    ""Deprecated alias for open_agent_in_project.""
     log.warning("open_claude_in_project is deprecated, use open_agent_in_project instead")
-    return await open_agent_in_project(project_dir, prompt)
+    return await open_agent_in_project(project_dir, prompt)"""
 
 
 # ---------------------------------------------------------------------------
 # Prompt into existing terminal — stubbed (no AppleScript on Windows)
 # ---------------------------------------------------------------------------
 async def prompt_existing_terminal(project_name: str, prompt: str) -> Dict[str, Any]:
+    log.debug("entered successfully")
     """Send a prompt to an existing terminal session.
 
     This relied on AppleScript keystrokes, which have no clean Windows equivalent.
@@ -217,6 +223,7 @@ async def prompt_existing_terminal(project_name: str, prompt: str) -> Dict[str, 
 # Chrome tab info — stubbed (would need Chrome DevTools Protocol)
 # ---------------------------------------------------------------------------
 async def get_chrome_tab_info() -> Dict[str, Any]:
+    log.debug("entered successfully")
     """Read the current Chrome tab's title and URL.
 
     Previously used AppleScript. Stubbed until Chrome DevTools Protocol integration.
@@ -233,6 +240,7 @@ async def monitor_build(
     synthesize_fn: Optional[Callable[[str], Awaitable[Optional[bytes]]]] = None,
     timeout_seconds: int = 600,
 ) -> None:
+    log.debug("entered successfully")
     """Monitor an agent build for completion. Notify via WebSocket when done.
 
     Looks for "--- JARVIS TASK COMPLETE ---" (success) or "FAILED" / "ERROR" (failure).
@@ -294,6 +302,7 @@ async def monitor_build(
 # Action router
 # ---------------------------------------------------------------------------
 async def execute_action(intent: Dict[str, str], projects: Optional[list] = None) -> Dict[str, Any]:
+    log.debug("entered successfully")
     """Route a classified intent to the right action function."""
     action = intent.get("action", "chat")
     target = intent.get("target", "")
@@ -325,6 +334,7 @@ async def execute_action(intent: Dict[str, str], projects: Optional[list] = None
 # Utilities
 # ---------------------------------------------------------------------------
 def _generate_project_name(prompt: str) -> str:
+    log.debug("entered successfully")
     """Generate a kebab-case project folder name from the prompt.
 
     Improved: preserves underscores, dots, and hyphens; limits length to 50 chars.
@@ -366,7 +376,7 @@ __all__ = [
     "open_browser",
     "open_chrome",
     "open_agent_in_project",
-    "open_claude_in_project",   # deprecated alias
+    # "open_claude_in_project",   # deprecated alias
     "prompt_existing_terminal",
     "get_chrome_tab_info",
     "monitor_build",

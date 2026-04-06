@@ -29,6 +29,7 @@ _local = threading.local()
 
 
 def _get_db() -> sqlite3.Connection:
+    log.debug("entered successfully")
     """Get thread-local database connection, creating it if needed."""
     if not hasattr(_local, "conn") or _local.conn is None:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -42,6 +43,7 @@ def _get_db() -> sqlite3.Connection:
 
 
 def close_thread_connection():
+    log.debug("entered successfully")
     """Close the thread-local connection if open."""
     if hasattr(_local, "conn") and _local.conn is not None:
         try:
@@ -71,6 +73,7 @@ class UsageLearner:
         self._ensure_tables()
 
     def _ensure_tables(self):
+        log.debug("entered successfully")
         """Ensure required tables exist (created by tracking.py, but be safe)."""
         conn = _get_db()
         conn.executescript("""
@@ -98,6 +101,7 @@ class UsageLearner:
         conn.commit()
 
     def get_frequent_types(self, days: int = 30) -> List[Tuple[str, int]]:
+        log.debug("entered successfully")
         """Get task type frequency over the specified period."""
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
         conn = _get_db()
@@ -113,6 +117,7 @@ class UsageLearner:
             return []
 
     def get_recent_projects(self, days: int = 7) -> List[str]:
+        log.debug("entered successfully")
         """Get unique project directories from recent usage patterns."""
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
         conn = _get_db()
@@ -132,6 +137,7 @@ class UsageLearner:
         user_text: str,
         known_projects: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[ContextSuggestion]:
+        log.debug("entered successfully")
         """Suggest relevant context based on user text and recent patterns.
 
         Returns a ContextSuggestion if confidence is high enough, None otherwise.
@@ -211,6 +217,7 @@ class UsageLearner:
         return None
 
     def get_session_stats(self) -> Dict[str, Any]:
+        log.debug("entered successfully")
         """Get overall usage statistics for the current session summary."""
         conn = _get_db()
         try:
@@ -233,6 +240,7 @@ class UsageLearner:
             return {"total_tasks": 0, "success_rate": 0.0, "tasks_this_week": 0}
 
     def close(self):
+        log.debug("entered successfully")
         """Close the thread-local connection for the current thread."""
         close_thread_connection()
 
